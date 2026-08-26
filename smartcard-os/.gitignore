@@ -1,0 +1,14 @@
+build/
+build-*/
+*.o
+*.a
+compile_commands.json
+
+# Virtual chip images produced by --state-dir
+simulator/state/
+card-state/
+*.bin
+
+__pycache__/
+*.pyc
+.pytest_cache/

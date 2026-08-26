@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""
+cardctl -- send APDUs to the simulator from the command line.
+
+    cardctl 00A40000023F00
+    cardctl 00A40000023F00 00A4000002DEAD      # several, one card session
+    cardctl --atr
+    echo 00A40000023F00 | cardctl -            # from stdin
+
+Output uses the conventional card-trace notation:
+
+    > 00 A4 00 00 02 3F 00
+    < 90 00
+
+Exit status is 0 if every APDU returned 9000, 1 otherwise -- so cardctl is
+usable in a shell script or a CI check.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "tests",
+        "python",
+    ),
+)
+
+from scos import CardError, SmartCard, hexs  # noqa: E402
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="cardctl",
+        description="Send APDUs to the smart-card simulator.",
+        epilog="Set SMARTCARD_SIM to point at the smartcard-sim binary.",
+    )
+    ap.add_argument("apdu", nargs="*", help="APDU as hex, or '-' to read stdin")
+    ap.add_argument("--atr", action="store_true", help="print the ATR and exit")
+    ap.add_argument("--state-dir", help="persist virtual NVM in this directory")
+    ap.add_argument("--sim", help="path to the smartcard-sim binary")
+    ap.add_argument("--raw", action="store_true", help="print bare hex, no > / <")
+    args = ap.parse_args()
+
+    apdus = list(args.apdu)
+    if apdus == ["-"] or (not apdus and not args.atr):
+        apdus = [ln.strip() for ln in sys.stdin if ln.strip()
+                 and not ln.lstrip().startswith("#")]
+
+    try:
+        with SmartCard(path=args.sim, state_dir=args.state_dir) as card:
+            if args.atr:
+                atr = card.atr()
+                print(hexs(atr) if not args.raw else atr.hex().upper())
+                if not apdus:
+                    return 0
+
+            failures = 0
+            for text in apdus:
+                try:
+                    sent = bytes.fromhex(
+                        "".join(c for c in text if c not in " \t:")
+                    )
+                except ValueError:
+                    print(f"cardctl: not valid hex: {text!r}", file=sys.stderr)
+                    failures += 1
+                    continue
+
+                response = card.send_apdu(sent)
+                if args.raw:
+                    print(f"{response.data.hex().upper()}{response.sw:04X}")
+                else:
+                    print(f"> {hexs(sent)}")
+                    body = f"{hexs(response.data)} " if response.data else ""
+                    sw = f"{response.sw1:02X} {response.sw2:02X}"
+                    print(f"< {body}{sw}")
+                if not response.ok:
+                    failures += 1
+            return 0 if failures == 0 else 1
+
+    except CardError as exc:
+        print(f"cardctl: {exc}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

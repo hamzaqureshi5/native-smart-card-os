@@ -1,0 +1,271 @@
+# Threat model
+
+## Scope and honesty
+
+This document covers **Milestone 1 only**: the HAL, the simulator, the kernel,
+the APDU engine and SELECT. It grows with each milestone.
+
+Two rules it follows:
+
+1. Every mitigation claimed here is **implemented and tested**, with the test
+   named. Planned mitigations are marked as planned.
+2. Where a threat cannot be addressed in software, the "Hardware dependency"
+   column says so. A simulator cannot mitigate a power-analysis attack, and
+   claiming otherwise would be the most dangerous thing this document could do.
+
+## Assets
+
+| Asset | Why it matters | Exists yet? |
+|---|---|---|
+| Card lifecycle state | controls whether the card functions at all | yes (RAM only) |
+| Selection state | later commands act on the selected file | yes |
+| PIN and retry counter | gates all user authentication | M3 |
+| Key material | the card's reason to exist | M5 |
+| File contents | the data the card protects | M2 |
+| Applet code and data | isolation between applications | M6 |
+| Transaction journal | integrity of every update | M4 |
+
+## Adversaries
+
+| Adversary | Capability |
+|---|---|
+| **Malicious reader** | sends arbitrary APDUs, cuts power at any instant, resets at will, replays |
+| **Malicious applet** | runs code on-card; tries to escape its sandbox | M6 |
+| **Local physical attacker** | holds the chip: power/EM traces, glitching, probing, decapsulation |
+| **Compromised host application** | legitimate credentials, hostile intent |
+
+Note the asymmetry that defines this whole field: **the attacker owns the
+device.** There is no trusted operator, no network perimeter, no ability to
+revoke. Unlike a server, a smart card is designed to be secure while physically
+in the hands of the person attacking it.
+
+---
+
+## T1 -- Malformed APDU causes memory corruption
+
+* **Component:** `src/apdu/apdu_parse.c`
+* **Attack:** Craft an APDU whose `Lc` claims more data than was sent, or whose
+  length arithmetic overflows, so the parser reads or writes out of bounds. The
+  classic version: `Lc = 0xFF` with two data bytes.
+* **Mitigation (implemented):**
+  - length validated before any indexing, never after
+  - all length arithmetic in `uint32_t` so `5 + 255 + 1` cannot wrap
+  - the parser copies nothing; `cmd->data` aliases the caller's buffer
+  - the output structure is zeroed on every failure path, so a caller that
+    ignores the status cannot read stale fields
+* **Tests:** `reject_lc_longer_than_data`, `reject_lc_shorter_than_data`,
+  `reject_too_short`, `exhaustive_length_consistency` (every Lc x length pair,
+  under ASan)
+* **Residual risk:** Low for short APDUs. Extended APDUs are refused rather than
+  parsed, so their risk is deferred, not accepted. Fuzzing (M2) is required
+  before this can be called settled.
+* **Hardware dependency:** No.
+
+## T2 -- Extended APDU misparsed as short
+
+* **Component:** `apdu_parse()`
+* **Attack:** Send `00 A4 00 00 00 00 02 3F 00`. A parser that reads `Lc = 0`
+  and then treats the rest as a short APDU processes a length it never
+  validated.
+* **Mitigation (implemented):** `Lc == 0` with bytes following is explicitly
+  identified as the extended encoding and refused with `6A81`. The output is
+  zeroed.
+* **Test:** `reject_extended_length`,
+  `test_extended_apdu_refused_not_misparsed`
+* **Residual risk:** None while extended APDUs are unimplemented. When they are
+  implemented (M2+), this becomes T1 again with 3-byte lengths and a 65535-byte
+  bound -- and needs the same treatment.
+* **Hardware dependency:** No.
+
+## T3 -- Card stops answering (denial of service / oracle)
+
+* **Component:** kernel, response builder
+* **Attack:** Find an input that makes the card return nothing. A silent card is
+  indistinguishable from a dead one, which is a serious failure mode in the
+  field; and if silence is reachable for *some* inputs only, silence itself
+  becomes an information oracle.
+* **Mitigation (implemented):**
+  - handlers return a status word and never write one; the dispatcher writes it,
+    so a handler cannot omit it
+  - the response builder reserves two bytes for SW before accepting payload
+  - internal overflow degrades to `6F00` rather than truncating
+* **Tests:** `never_fails_to_answer` (48,785 checks over a CLA x INS x length
+  sweep, asserting SW1 is always a valid ISO class),
+  `test_hostile_inputs_all_get_a_status_word`, `test_card_survives_a_flood`
+* **Residual risk:** Low. An infinite loop inside a future handler would still
+  hang the card; real hardware also has a watchdog, which the simulator does not
+  model.
+* **Hardware dependency:** Partial -- a watchdog is a hardware feature.
+
+## T4 -- Status words leak information
+
+* **Component:** kernel validation order, command handlers
+* **Attack:** Use the *difference* between error codes to map the card. If
+  SELECT of a nonexistent file returns `6A82` but an unsupported selection
+  method also returns `6A82`, an attacker cannot tell them apart -- but the
+  reverse case is worse: if an unsupported CLA reveals whether the INS inside it
+  exists, the attacker enumerates the command set of classes the card does not
+  even serve.
+* **Mitigation (implemented):**
+  - fixed validation order: structure -> class -> instruction -> parameters ->
+    security -> execute
+  - CLA is validated before INS, so all instructions in an unsupported class
+    give an identical answer
+  - unimplemented-but-legal selection methods return `6A86` ("incorrect
+    parameters"), **not** `6A82` ("file not found"): we never looked for the
+    file, and saying otherwise would mislead
+* **Tests:** `cla_checked_before_ins`, `select_unsupported_p1_is_6a86`,
+  `test_class_diagnostics`
+* **Residual risk:** Medium and inherent. ISO status words are *designed* to be
+  diagnostic, so some information disclosure is required by the standard. The
+  discipline is to leak only what the standard intends. Needs re-examination
+  when file access conditions arrive (M3), where "file not found" versus "access
+  denied" is a genuine and much-debated design tension.
+* **Hardware dependency:** No.
+
+## T5 -- Failed command corrupts state
+
+* **Component:** command handlers
+* **Attack:** Send a SELECT that fails late, and hope the card has already
+  discarded its previous selection -- clearing a security context with a garbage
+  APDU.
+* **Mitigation (implemented):** State is committed only after every check
+  passes. `scos_cmd_select()` writes `k->selected_fid` as its final act.
+* **Tests:** `failed_select_preserves_previous_selection`,
+  `select_unknown_file_is_6a82` (asserts no selection was created),
+  `test_failed_select_keeps_the_previous_one`
+* **Residual risk:** Low now; grows with handler complexity. This is precisely
+  what the transaction system (M4) generalises -- validate-then-commit does not
+  scale to multi-write commands by discipline alone.
+* **Hardware dependency:** No.
+
+## T6 -- Out-of-range NVM access
+
+* **Component:** `src/hal/simulator/hal_sim_nvm.c`
+* **Attack:** Reach a HAL call with a hostile offset -- e.g.
+  `offset = 0xFFFFFFF0, len = 0x20`, where a naive `offset + len > size` check
+  written in `uint32_t` **wraps** and passes.
+* **Mitigation (implemented):** Bounds computed in `uint64_t`. Both endpoints of
+  every range checked. An undefined region is refused rather than mapped
+  somewhere.
+* **Test:** `out_of_range_access_is_refused` (includes the wrapping cases, and
+  asserts the exact boundary still *succeeds* -- an off-by-one the other way is
+  equally a bug)
+* **Residual risk:** Low in the simulator. **The real HAL must repeat this
+  independently** -- on hardware a bad offset either faults or silently corrupts
+  a neighbouring structure that fails a thousand power cycles later.
+* **Hardware dependency:** Yes, for the real implementation.
+
+## T7 -- Timing side channel in comparison
+
+* **Component:** `src/kernel/os_mem.c`
+* **Attack:** Time a PIN or MAC comparison. An early-exit `memcmp` leaks the
+  length of the matching prefix, turning a 10^6-guess search for a 6-digit PIN
+  into roughly 60 guesses.
+* **Mitigation (implemented):** `os_memeq_ct()` accumulates all differences with
+  `|=` and branches once, at the end. The core does not use `memcmp` for
+  anything security-relevant -- one reason it provides its own primitives instead
+  of including `<string.h>`.
+* **Test:** `constant_time_equality_is_correct`, including every single-bit
+  difference at every position (an accumulator built with `+` instead of `|`
+  could cancel out).
+* **Residual risk:** **Substantial, and software cannot close it.** This
+  addresses a *remote* timing observer. An attacker holding the chip has power
+  and EM traces, cache and branch-predictor effects, and can glitch the
+  comparison outright. Constant-time code is necessary and nowhere near
+  sufficient.
+* **Hardware dependency:** Yes -- needs hardware countermeasures, and the
+  compiler must not undo the constant-time property (verifiable only by
+  inspecting generated code, which is not yet part of the build).
+
+## T8 -- Weak randomness
+
+* **Component:** `hal_random_bytes()` (simulator)
+* **Attack:** Predict challenges, nonces or generated keys.
+* **Mitigation:** **NONE, AND NONE IS POSSIBLE HERE.** The simulator uses a
+  seeded xorshift PRNG, deliberately deterministic so tests reproduce.
+* **Residual risk:** **TOTAL.** Anyone who learns the seed predicts every value
+  the card will ever produce. This is documented at the call site, in
+  `docs/simulator.md`, and here.
+* **Consequence for the project:** No security property depending on
+  unpredictability may be validated in the simulator. Only the *logic* around it
+  can be. The API is designed so the real implementation can report health-test
+  failure (`HAL_ERR_IO`), and callers are written to check -- because a HAL that
+  silently substitutes weak entropy for a failed TRNG is how real products ship
+  predictable keys.
+* **Hardware dependency:** **Yes, absolutely.** Requires a certified TRNG with
+  continuous health testing.
+
+## T9 -- Layering violation makes the OS unportable
+
+* **Component:** the build
+* **Attack:** Not an attacker -- entropy. Someone adds `#include <stdlib.h>` and
+  a `malloc()`. Everything compiles and every functional test passes on a PC.
+  The defect surfaces only at the cross-build, where the port becomes a rewrite.
+* **Mitigation (implemented):** The `core_no_host_deps` test runs `nm` over
+  `libscos_core.a` and fails the build on any symbol that is not a HAL function,
+  one of the core's own, or a compiler-emitted memory intrinsic. The core is
+  also compiled `-ffreestanding`.
+* **Test:** `core_no_host_deps`. It caught a real issue on first run, and the
+  linker separately forced `scos_card_loop()` out of `kernel.c` into its own
+  translation unit.
+* **Residual risk:** Low. The intrinsic allowlist (`memcpy`, `memset`,
+  `memmove`, `memcmp`) is a deliberate, documented hole: compilers emit these
+  from ordinary struct assignment even under `-ffreestanding`, and every real
+  bare-metal target provides them.
+* **Hardware dependency:** No.
+
+## T10 -- Power failure corrupts persistent state
+
+* **Component:** NVM, filesystem, transactions
+* **Attack:** Cut power during a write. Leave a file half-updated, a PIN counter
+  un-decremented (infinite guesses), or filesystem metadata inconsistent.
+* **Mitigation:** **NOT YET IMPLEMENTED.** Milestone 4. Today
+  `hal_nvm_write()` is an atomic `memcpy` -- the *optimistic* case -- so
+  **nothing in this project may currently claim tear-resistance.**
+  Groundwork in place: `hal_nvm_sync()` exists as an explicit durability
+  barrier, so the OS is written against a device that buffers writes; and the
+  EEPROM/FLASH split with distinct page sizes is modelled, because a retry
+  counter in page-erased flash is a different and harder problem.
+* **Residual risk:** **HIGH and unmitigated.** The most important open item.
+* **Hardware dependency:** Yes -- the journal design depends on what a real
+  interrupted page program leaves behind, which is a datasheet question.
+
+---
+
+## Deferred threats
+
+Not addressed because the subsystems do not exist yet. Listed so they are not
+forgotten.
+
+| Threat | Milestone | Note |
+|---|---|---|
+| PIN brute force / lockout | M3 | counter must decrement *before* the check, and survive power loss |
+| Retry-counter rollback | M3/M4 | cut power after a failed verify to restore tries -- a real, repeatedly-exploited attack |
+| Unauthorized file access | M3 | access conditions per file |
+| Replay | M5+ | needs secure messaging (SCP03) and a session counter |
+| Key extraction via API | M5 | private keys marked non-exportable; no API path to raw material |
+| Malicious applet escape | M6 | **the initial native applet interface provides NO enforced isolation** -- applets are linked C code. To be documented as a known limitation, not a solved problem. Real isolation needs a bytecode VM or an MPU. |
+| Unauthorized installation | M7 | Card Manager, security domains |
+| Side-channel (power/EM) | hardware | cannot be simulated |
+| Fault injection | hardware | software consequences testable (M4); the attack is not |
+| Invasive probing | hardware | |
+
+## Notes on what makes this different from software security
+
+Worth stating explicitly, because it drives design choices that look strange
+otherwise:
+
+* **The attacker owns the device.** No perimeter, no operator, no revocation.
+* **Power is the attacker's to give.** Every algorithm must be correct when
+  interrupted at an arbitrary instruction. This is why transactions are an OS
+  primitive rather than a library.
+* **There is no trusted time.** The card is clocked by the reader. Rate limiting
+  by elapsed time is meaningless; PIN limits are *counters in NVM*, because
+  counters survive power loss and clocks do not.
+* **Physical secrets cannot be rotated.** A key extracted from one card is
+  extracted for that card's lifetime, and possibly for a whole product family if
+  keys are not diversified per device.
+* **Failure must be safe, not graceful.** The correct response to a detected
+  attack is to stop -- block the PIN, terminate the card -- not to retry, log and
+  continue.

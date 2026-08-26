@@ -1,0 +1,133 @@
+Every command verified from a clean copy. Here's the guide.
+
+1. Native build and test — start here
+
+cd smartcard-os
+cmake -S . -B build
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+
+Expect 100% tests passed, 0 tests failed out of 7 in under a second. This runs everything under AddressSanitizer + UndefinedBehaviorSanitizer.
+
+Individual tests, which print per-assertion detail:
+
+./build/tests/test_apdu_parse      # 67,400 checks — the parser
+./build/tests/test_fs             # 27,350 checks — the filesystem
+./build/tests/test_select         # 48,799 checks — commands, dispatch, lifecycle
+./build/tests/test_hal_sim        # the hal.h contract
+./build/tests/test_os_mem         # bounds-checked copy, constant-time compare
+
+ctest --test-dir build -R fs -V   # or by name, verbose
+
+2. Talk to the card
+
+Interactive — type APDUs, spaces ignored:
+
+./build/smartcard-sim
+00 A4 00 00 02 3F 00      -> 9000    select the Master File
+00 A4 00 00 02 2F 00      -> 9000    select EF 2F00 (32 bytes)
+00 D6 00 00 04 CAFEF00D   -> 9000    write 4 bytes
+00 B0 00 00 04            -> CAFEF00D9000
+.atr    .reset    .help    .quit
+
+cardctl — scripted, with card-trace formatting:
+
+export SMARTCARD_SIM=$PWD/build/smartcard-sim
+./tools/cardctl/cardctl 00A40000023F00 00A40000022F00 00D6000004CAFEF00D 00B0000004
+> 00 A4 00 00 02 3F 00
+< 90 00
+...
+> 00 B0 00 00 04
+< CA FE F0 0D 90 00
+Exit status is 0 only if every APDU returned 9000 — usable in a shell script.
+
+Persistent NVM (writes card_eeprom.bin / card_flash.bin):
+
+./build/smartcard-sim --state-dir mycard
+
+3. The ARM target — real Cortex-M3 machine code
+
+cmake -S . -B build-arm -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-arm-scv1.cmake
+cmake --build build-arm -j
+ctest --test-dir build-arm --output-on-failure
+
+The build prints the real footprint, and the link fails if the OS outgrows the chip:
+
+   text    data     bss
+  13528       0     560
+
+Run it:
+
+./tools/run-scv1.sh                          # interactive
+./tools/run-scv1.sh --state-dir mycard       # persistent NVM
+printf '00A40000023F00\n.quit\n' | ./tools/run-scv1.sh
+
+The payoff — the same Python suite against ARM:
+
+SCOS_TARGET=qemu SCOS_FIRMWARE=$PWD/build-arm/smartcard-os.elf \
+  PYTHONPATH=$PWD/tests/python \
+  python3 -m unittest discover -s tests/python -p "test_*.py"
+Ran 53 tests in 3.0s
+OK (skipped=1)
+
+One skip is legitimate: it closes stdin to test EOF, and a UART has no EOF — a real card waits for power to go away.
+
+4. Card images
+
+# factory-blank: personalises itself on first boot
+./tools/mkcardimage.py --code build-arm/smartcard-os.bin -o card.bin
+
+# pre-personalised: code + an existing filesystem
+./tools/mkcardimage.py --code build-arm/smartcard-os.bin \
+    --eeprom mycard/card_eeprom.bin --dflash mycard/card_flash.bin -o card.bin
+
+./tools/mkcardimage.py --inspect card.bin
+
+Boot a raw image with no external files at all:
+
+qemu-system-arm -M mps2-an385 -cpu cortex-m3 \
+  -display none -monitor none -serial stdio -kernel card.bin
+
+5. Python API
+
+import sys; sys.path.insert(0, "tests/python")
+from scos import SmartCard
+
+with SmartCard() as card:                     # or SmartCard(target="qemu")
+    assert card.send_apdu("00A40000023F00").sw == 0x9000
+    card.select(0x2F00)
+    card.send_apdu("00D6000004CAFEF00D")
+    print(card.send_apdu("00B0000004"))       # CA FE F0 0D 9000
+
+6. Other build modes
+
+# Release + ROM budget check (disabled under sanitizers — they inflate code size)
+cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release -DSCOS_SANITIZE=OFF
+cmake --build build-rel -j && ctest --test-dir build-rel
+
+# GCC static analyzer
+cmake -S . -B build-an -DSCOS_STATIC_ANALYSIS=ON -DSCOS_SANITIZE=OFF
+cmake --build build-an -j
+
+# Prove the OS has no hidden simulator dependency: link it against the
+# do-nothing Samsung stub. All core tests still pass.
+cmake -S . -B build-sam -DSCOS_HAL=samsung -DSCOS_ACK_SAMSUNG_STUB=ON -DSCOS_SANITIZE=OFF
+cmake --build build-sam -j && ctest --test-dir build-sam
+
+# A smaller chip
+cmake -S . -B build-small -DSCOS_SIM_FLASH_KB=64 -DSCOS_SIM_RAM_KB=8
+
+One thing worth trying yourself
+
+It shows the architecture is real rather than claimed:
+
+mkdir -p /tmp/x && cd /tmp/x
+printf '00A40000022F00\n00D6000006434146454245\n.quit\n' \
+  | ~/operating-system/smartcard-os/build/smartcard-sim --state-dir . --quiet
+
+printf '00A40000022F00\n00B0000006\n.quit\n' | timeout 30 qemu-system-arm \
+  -M mps2-an385 -cpu cortex-m3 -display none -monitor none -serial stdio \
+  -semihosting-config enable=on,target=native \
+  -kernel ~/operating-system/smartcard-os/build-arm/smartcard-os.elf
+
+x86 writes CAFEBE; ARM Cortex-M3 mounts the same image and reads it back. Same filesystem, two instruction sets.

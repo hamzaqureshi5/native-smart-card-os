@@ -1,0 +1,137 @@
+/* SPDX-License-Identifier: MIT
+ *
+ * fs.h -- LOGICAL layer: the file tree and the current selection.
+ *
+ * Knows about parents, children, paths and selection. Knows NO NVM offsets --
+ * everything physical goes through fs_store.
+ */
+#ifndef SCOS_FS_H
+#define SCOS_FS_H
+
+#include "filesystem/fs_types.h"
+
+/*
+ * THE CURRENT SELECTION -- the card's most important piece of volatile state.
+ *
+ * A card is stateful in a way a stateless request/response service is not:
+ * READ BINARY does not name a file, it reads "the current EF". So almost every
+ * command is implicitly scoped by this struct, and getting its transitions
+ * wrong is a security bug rather than a usability one.
+ *
+ * ISO/IEC 7816-4 rules implemented here:
+ *   - selecting a DF makes it the current DF and CLEARS the current EF
+ *   - selecting an EF sets the current EF; the current DF becomes its parent
+ *   - a reset returns to the MF with no current EF
+ *   - a FAILED selection changes nothing
+ *
+ * Why clearing the EF on a DF selection matters: without it, a command could
+ * act on an EF from a different application than the currently selected DF.
+ */
+typedef struct {
+    uint16_t cur_df; /* descriptor index of the current DF; always valid    */
+    uint16_t cur_ef; /* descriptor index, or FS_INVALID_INDEX if none       */
+} fs_selection;
+
+/* -------------------------------------------------------------- lifecycle -- */
+
+/* Mount the filesystem, formatting and personalising a blank chip.
+ *
+ * Returns FS_OK when the card is usable. A corrupt or unknown-version image is
+ * reported, NOT auto-repaired -- see fs_store_mount().
+ */
+fs_status fs_init(void);
+
+/* Write the factory file layout. Called by fs_init() on a blank chip; exposed
+ * so tests can rebuild a known tree. DESTRUCTIVE. */
+fs_status fs_personalise(void);
+
+/* Reset the selection to the MF, no current EF. Called on card reset. */
+void fs_selection_reset(fs_selection *sel);
+
+uint16_t fs_root_index(void);
+
+/* ------------------------------------------------------------- inspection -- */
+
+fs_status fs_get(uint16_t index, fs_descriptor *out);
+
+/* Find a direct child of `parent` by file identifier. */
+fs_status fs_find_child(uint16_t parent, uint16_t file_id, uint16_t *out_index);
+
+/* Find an EF under `df` by its short EF identifier (1..30). */
+fs_status fs_find_by_sfi(uint16_t df, uint8_t sfi, uint16_t *out_index);
+
+/* Number of direct children of a DF. Used to refuse deleting a non-empty DF. */
+uint16_t fs_child_count(uint16_t parent);
+
+/* --------------------------------------------------------------- selection -- */
+
+/*
+ * SELECT by file identifier, ISO P1=00 semantics.
+ *
+ * ISO leaves the search order to the card, so ours is DOCUMENTED AND FIXED --
+ * an undocumented order becomes an accidental part of the interface that
+ * clients depend on:
+ *
+ *   1. the MF, if file_id is 3F00
+ *   2. a direct child of the current DF
+ *   3. the current DF itself
+ *   4. the parent of the current DF
+ *
+ * Deliberately absent: a global search of the whole tree. That would let an
+ * application reach another application's files by identifier alone, which is
+ * exactly the isolation failure the DF hierarchy exists to prevent.
+ */
+fs_status fs_select_by_fid(fs_selection *sel, uint16_t file_id);
+
+fs_status fs_select_child_df(fs_selection *sel, uint16_t file_id);
+fs_status fs_select_child_ef(fs_selection *sel, uint16_t file_id);
+fs_status fs_select_parent(fs_selection *sel);
+
+/* SELECT by path: a sequence of 2-byte identifiers, walked from the MF
+ * (from_mf) or from the current DF. */
+fs_status fs_select_by_path(fs_selection *sel, const uint8_t *path,
+                            uint16_t path_len, bool from_mf);
+
+/* The descriptor index the selection resolves to: the current EF if one is
+ * selected, otherwise the current DF. This is what SELECT reports an FCI for. */
+uint16_t fs_selected_index(const fs_selection *sel);
+
+/* ------------------------------------------------------------ EF data I/O -- */
+
+/*
+ * Read from / write to a transparent EF.
+ *
+ * Bounds are enforced against the EF's declared size, not against FLASH: a
+ * file must not be readable past its own end even if the bytes beyond it exist
+ * and belong to another file.
+ *
+ * fs_ef_read() performs a SHORT READ rather than failing when fewer than `len`
+ * bytes remain, reporting the count in *out_read. That is what ISO requires:
+ * READ BINARY returns the available bytes with SW 6282 rather than refusing.
+ */
+fs_status fs_ef_read(uint16_t index, uint16_t offset, uint16_t len,
+                     uint8_t *dst, uint16_t *out_read);
+
+/* Writes must be complete. A partial UPDATE BINARY would leave the file in a
+ * state the caller cannot reason about, so an out-of-range write is refused
+ * entirely. */
+fs_status fs_ef_write(uint16_t index, uint16_t offset, uint16_t len,
+                      const uint8_t *src);
+
+/* ------------------------------------------------------------ ISO encoding -- */
+
+/* Map a filesystem error onto the ISO/IEC 7816-4 status word to answer with.
+ * Lives here rather than in each command handler so that one filesystem error
+ * always produces the same status word, whichever command hit it. */
+uint16_t scos_fs_error_to_sw(fs_status st);
+
+/* The ISO/IEC 7816-4 "file descriptor byte" for tag 82 of an FCP template.
+ * Converts our internal type code into the bit-packed wire encoding. */
+uint8_t fs_iso_descriptor_byte(const fs_descriptor *desc);
+
+/* Build an FCP-style data-object sequence (tags 82, 83, 80, 8A, 88) describing
+ * `desc`. Writes at most cap bytes; returns the length, or 0 if it did not fit.
+ * The caller wraps it in a 6F (FCI) or 62 (FCP) template. */
+uint16_t fs_build_fcp(const fs_descriptor *desc, uint8_t *out, uint16_t cap);
+
+#endif /* SCOS_FS_H */
