@@ -58,10 +58,11 @@ and fuzz targets rather than being tacked onto a working milestone.
 * **refuse deleting a non-empty DF** :: DONE -- a recursive delete cannot be
   rolled back before M4, so a power cut part way through would leave orphaned
   descriptors pointing at a reused parent slot.
-* **KNOWN LIMITATION**: `DELETE FILE` frees the descriptor slot but NOT the
-  EF's data bytes. `fs_store`'s data area is a bump allocator, so deleting
-  leaks space. Compaction needs atomic data movement, which needs M4. Asserted
-  in `test_create.c` so it cannot regress silently.
+* ~~**KNOWN LIMITATION**: `DELETE FILE` frees the descriptor slot but NOT the
+  EF's data bytes.~~ **FIXED in M4** -- and not by compaction. See the M4
+  section. The assertion in `test_create.c` that pinned the leak has been
+  reversed to assert reclamation, which is what kept the limitation from
+  quietly becoming something worse in the meantime.
 * **`ACTIVATE FILE` / `DEACTIVATE FILE` (44 / 04)** :: DONE --
   `src/filesystem/cmd_lifecycle.c`.
 
@@ -703,10 +704,43 @@ removing the final data write fails 5.
   defended against; both resist power interruption and say nothing about active
   fault injection.
 
-### Remaining in M4
+* **space reclamation on `DELETE FILE`** :: DONE, and **not by compaction** --
+  `fs_store_find_free_data()` in `src/filesystem/fs_store.c`.
 
-* `fs_store` data-area compaction, so `DELETE FILE` stops leaking the bytes of
-  the EF it deletes -- this needs atomic data movement, which is now possible
+  The bump allocator only moved `data_top` upward, so a deleted EF's bytes were
+  stranded for good: 32 descriptor slots against a 256 KB data area meant
+  ordinary create/delete churn eventually refused to create anything with
+  plenty of space apparently free. Asserted as a limitation in
+  `test_create.c` from M2b onward, waiting for transactions.
+
+  Compaction was the expected fix and is the wrong one. It moves live data, and
+  the undo log for moving a large EF does not fit in a 2 KB journal -- so it
+  would have to be incremental, leaving the card consistent but differently
+  laid out between steps, for a benefit a card does not need. Real card
+  filesystems reuse free extents rather than defragmenting, because moving data
+  on flash costs erase cycles and time.
+
+  Instead the allocator does **first fit over the live descriptors**. A freed
+  slot stops being in use, so the next file that fits reuses its extent. That
+  also removes `data_top`, which was a *second source of truth* about which
+  bytes are taken -- and one that could disagree with the descriptors, as it did
+  after an interrupted `CREATE FILE` where the top moved and the descriptor was
+  never written. `CREATE FILE` no longer writes the superblock at all: one fewer
+  NVM write and one fewer journal entry per file.
+
+  **The rename mattered more than the algorithm.** `fs_store_alloc_data` became
+  `fs_store_find_free_data` because it no longer reserves anything -- the
+  descriptor is the reservation. Calling it twice without writing a descriptor
+  returns the same offset, which is correct for what it does and catastrophic if
+  you believe the old name. It hung a test for ten minutes: the test allocated
+  repeatedly without storing descriptors, relying on the bump pointer's side
+  effect, so every call returned 0 and `while (free >= 30000)` never ended. Both
+  real callers were always correct; only the name was wrong.
+
+  Mutation-checked: making extents never appear in use fails 57 checks in
+  `test_fs` and 4 in `test_create`.
+
+### Remaining in M4
 * recursive `DELETE FILE` of a non-empty DF, refused since M2b for the same
   reason
 * fault injection in the ARM HAL, so the interruption tests run on the chip

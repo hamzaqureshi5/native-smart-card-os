@@ -393,24 +393,67 @@ TEST(delete_removes_the_file)
     CHECK_HEX(create_ef(0x2808u, 8u, 0u), SW_OK);
 }
 
-TEST(delete_frees_the_descriptor_slot_but_not_the_data)
+TEST(delete_frees_the_data_bytes_as_well_as_the_slot)
 {
-    /* KNOWN LIMITATION, asserted so it cannot regress silently: fs_store's
-     * data area is a bump allocator, so a deleted EF's bytes are leaked.
-     * Compaction needs atomic data movement, which needs the M4 journal. */
+    /*
+     * THIS ASSERTION IS THE REVERSE OF WHAT IT USED TO BE, and the reversal is
+     * the M4 fix landing.
+     *
+     * It read: "KNOWN LIMITATION, asserted so it cannot regress silently:
+     * fs_store's data area is a bump allocator, so a deleted EF's bytes are
+     * leaked. Compaction needs atomic data movement, which needs the M4
+     * journal." It was correct from M2b until now, and it is the reason the
+     * limitation never quietly became something worse.
+     *
+     * The fix turned out not to be compaction. Compaction moves live data, and
+     * the undo log for moving a large EF would not fit in a 2 KB journal -- so
+     * it would have to be incremental, leaving the card consistent but
+     * differently laid out between steps, for a benefit a card does not need.
+     * Instead the allocator derives its answer from the live descriptors, so a
+     * freed slot's extent simply stops being in use. Real card filesystems
+     * reuse free extents rather than defragmenting, because moving data on
+     * flash costs erase cycles and time.
+     */
     fresh();
     CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
 
     const uint32_t free_before = fs_store_data_free();
     CHECK_HEX(create_ef(0x2809u, 64u, 0u), SW_OK);
     const uint32_t free_after_create = fs_store_data_free();
-    CHECK(free_after_create < free_before);
+    CHECK_EQ(free_after_create, free_before - 64u);
 
     CHECK_HEX(delete_file(0x2809u), SW_OK);
-    CHECK_EQ(fs_store_data_free(), free_after_create); /* NOT reclaimed */
+    /* RECLAIMED, exactly and completely. */
+    CHECK_EQ(fs_store_data_free(), free_before);
 
-    /* The slot, however, is reusable. */
+    /* And the slot is reusable too. */
     CHECK_HEX(create_ef(0x280Au, 4u, 0u), SW_OK);
+}
+
+TEST(create_delete_cycles_do_not_exhaust_the_data_area)
+{
+    /*
+     * The consequence that made the leak worth fixing rather than documenting
+     * for ever. With 32 descriptor slots and a bump allocator, repeated
+     * create/delete of large files ran the 256 KB data area dry -- so a card
+     * doing ordinary personalisation churn would eventually refuse to create
+     * anything, with plenty of space apparently free.
+     *
+     * Sixty cycles of a 30 KB file is nearly 1.8 MB of allocation against a
+     * 256 KB area: impossible without reuse, and it now costs nothing.
+     */
+    fresh();
+    CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
+    const uint32_t free_at_start = fs_store_data_free();
+
+    for (unsigned n = 0; n < 60u; n++) {
+        CHECK_HEX(create_ef(0x2900u, 30000u, 0u), SW_OK);
+        CHECK_HEX(delete_file(0x2900u), SW_OK);
+    }
+
+    /* Back exactly where it started -- not merely "still working". */
+    CHECK_EQ(fs_store_data_free(), free_at_start);
+    CHECK_HEX(create_ef(0x2901u, 30000u, 0u), SW_OK);
 }
 
 TEST(delete_refuses_a_non_empty_df)
@@ -794,7 +837,8 @@ int main(void)
     RUN(the_descriptor_table_has_a_hard_limit);
     RUN(running_out_of_data_space_is_clean);
     RUN(delete_removes_the_file);
-    RUN(delete_frees_the_descriptor_slot_but_not_the_data);
+    RUN(delete_frees_the_data_bytes_as_well_as_the_slot);
+    RUN(create_delete_cycles_do_not_exhaust_the_data_area);
     RUN(delete_refuses_a_non_empty_df);
     RUN(delete_refuses_the_mf);
     RUN(delete_only_reaches_children_of_the_current_df);

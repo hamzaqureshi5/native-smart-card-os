@@ -401,7 +401,89 @@ uint16_t fs_store_find_free_slot(void)
 
 /* ---------------------------------------------------------------- EF data -- */
 
-fs_status fs_store_alloc_data(uint16_t size, uint32_t *out_offset)
+/*
+ * Is any live EF's data extent overlapping [start, start + len)?
+ *
+ * Only LIVE transparent EFs count. A freed slot's type byte is 0xFF and its
+ * offset and size fields are whatever the deleted file left there -- counting
+ * those would reserve phantom extents for ever, which is the leak this
+ * function exists to remove, reintroduced from the other direction.
+ */
+static bool extent_in_use(uint32_t start, uint32_t len, uint32_t *out_end)
+{
+    const uint64_t want_end = (uint64_t)start + (uint64_t)len;
+
+    for (uint16_t i = 0; i < FS_MAX_FILES; i++) {
+        fs_descriptor d;
+        if (fs_store_read_desc(i, &d) != FS_OK) {
+            continue; /* free or unreadable slot: owns nothing */
+        }
+        if (d.type != FS_TYPE_EF_TRANSPARENT || d.size == 0u) {
+            continue; /* MF and DFs hold no data bytes */
+        }
+        const uint64_t s = (uint64_t)d.data_offset;
+        const uint64_t e = s + (uint64_t)d.size;
+        if (s < want_end && start < e) {
+            if (out_end != NULL) {
+                *out_end = (uint32_t)e;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * FIRST FIT OVER THE LIVE DESCRIPTORS, replacing the bump allocator.
+ *
+ * RENAMED FROM fs_store_alloc_data, AND THE RENAME IS THE IMPORTANT PART.
+ *
+ * This function no longer RESERVES anything. It answers "where would `size`
+ * bytes fit?" and nothing more; the reservation happens when the caller writes
+ * the descriptor, because the descriptor IS the record of ownership.
+ *
+ * That is a real change of contract and the old name hid it. Calling it twice
+ * without writing a descriptor in between returns the SAME offset both times --
+ * which is correct for what it now does and catastrophic if you believe the old
+ * name. It hung a test that allocated repeatedly without ever storing a
+ * descriptor: every call returned 0, the free space never shrank, and the loop
+ * ran for ever.
+ *
+ * Both real callers (fs_personalise and fs_create_file) write the descriptor
+ * immediately, so they were always correct. The name was the only thing
+ * wrong.
+ *
+ * The bump allocator only ever moved `data_top` upward, so DELETE FILE freed a
+ * descriptor slot and stranded the EF's data bytes for good. With 32 slots and
+ * a 256 KB data area, repeated create/delete cycles exhausted the space --
+ * asserted as a known limitation in test_create.c since M2b, waiting for
+ * transactions to make a fix safe.
+ *
+ * The fix is not compaction. Compaction moves live data, and the undo log for
+ * moving a large EF would not fit in a 2 KB journal -- so it would have to be
+ * incremental, with the card consistent but differently laid out between
+ * steps, for no benefit a card actually needs. Real card filesystems reuse
+ * free extents rather than defragmenting, because moving data on flash costs
+ * erase cycles and time.
+ *
+ * WHAT THIS REMOVES BESIDES THE LEAK
+ *
+ * `data_top` was a second source of truth about which bytes are in use, and it
+ * could disagree with the descriptors -- which is exactly what happened after
+ * an interrupted CREATE FILE: the superblock recorded the new top, the
+ * descriptor was never written, and the space was leaked. The old comment right
+ * here said so and called it "wasteful but safe".
+ *
+ * Deriving the answer from the descriptors means there is nothing to disagree
+ * with. It also means CREATE FILE no longer writes the superblock at all, which
+ * removes one NVM write and one journal entry from every file creation.
+ *
+ * O(n^2) in the worst case and deliberately array-free: each iteration advances
+ * past at least one extent, so it terminates in at most FS_MAX_FILES steps.
+ * Sorting the extents first would be faster and would cost ~200 bytes of stack
+ * -- the one kind of RAM this project does not account for.
+ */
+fs_status fs_store_find_free_data(uint16_t size, uint32_t *out_offset)
 {
     if (out_offset == NULL) {
         return FS_ERR_PARAM;
@@ -410,22 +492,43 @@ fs_status fs_store_alloc_data(uint16_t size, uint32_t *out_offset)
     if (!s_sb.mounted) {
         return FS_ERR_NOT_FORMATTED;
     }
-
-    const uint32_t flash = hal_nvm_size(HAL_NVM_FLASH);
-    /* uint64_t so a huge size cannot wrap data_top into a valid-looking value. */
-    const uint64_t end = (uint64_t)s_sb.data_top + (uint64_t)size;
-    if (end > (uint64_t)flash) {
-        return FS_ERR_NO_SPACE;
+    if (size == 0u) {
+        /* A zero-length EF is refused higher up; allocating nothing would
+         * return an offset that overlaps whatever comes next. */
+        return FS_ERR_PARAM;
     }
 
-    *out_offset   = s_sb.data_top;
-    s_sb.data_top = (uint32_t)end;
+    const uint32_t flash     = hal_nvm_size(HAL_NVM_FLASH);
+    uint32_t       candidate = 0u;
 
-    /* The superblock must record the new top before the caller stores a
-     * descriptor pointing at it. If power is lost after this and before the
-     * descriptor is written, the space is leaked -- which is wasteful but safe.
-     * The reverse order would hand the same bytes out twice. */
-    return sb_write();
+    for (uint16_t hops = 0; hops <= FS_MAX_FILES; hops++) {
+        if ((uint64_t)candidate + (uint64_t)size > (uint64_t)flash) {
+            return FS_ERR_NO_SPACE;
+        }
+        uint32_t end = 0u;
+        if (!extent_in_use(candidate, size, &end)) {
+            *out_offset = candidate;
+            /*
+             * No superblock write. The descriptor the caller is about to store
+             * IS the record that these bytes are taken, so there is no second
+             * place for it to be recorded and no window in which the two
+             * disagree. If power goes before that descriptor is written,
+             * nothing was allocated -- rather than "the top moved and the space
+             * is leaked", which is what the previous version did.
+             */
+            return FS_OK;
+        }
+        if (end <= candidate) {
+            /* Cannot happen: an overlapping extent ends after `candidate`.
+             * Guarded so a corrupt descriptor cannot spin here. */
+            return FS_ERR_CORRUPT;
+        }
+        candidate = end;
+    }
+
+    /* More hops than there are descriptor slots: each hop passed an extent, so
+     * this is unreachable unless the table is inconsistent. */
+    return FS_ERR_NO_SPACE;
 }
 
 fs_status fs_store_read_data(uint32_t offset, uint16_t len, void *dst)
@@ -467,9 +570,28 @@ fs_status fs_store_write_data(uint32_t offset, uint16_t len, const void *src)
 
 uint32_t fs_store_data_free(void)
 {
-    if (!s_sb.mounted) {
-        return 0u;
-    }
+    /*
+     * Derived from the live descriptors, like the allocator above, and for the
+     * same reason: `data_top` was a second source of truth that could disagree
+     * with them -- and did, after an interrupted CREATE FILE.
+     *
+     * Reports the total unused bytes, NOT the largest contiguous run. A caller
+     * that sees N free is not promised an N-byte extent, because freed extents
+     * leave gaps. fs_store_find_free_data() is the only honest answer to "will
+     * this fit", and it is the one fs_create_file() asks.
+     */
     const uint32_t flash = hal_nvm_size(HAL_NVM_FLASH);
-    return (flash > s_sb.data_top) ? (flash - s_sb.data_top) : 0u;
+    uint32_t       used  = 0u;
+
+    for (uint16_t i = 0; i < FS_MAX_FILES; i++) {
+        fs_descriptor d;
+        if (fs_store_read_desc(i, &d) != FS_OK) {
+            continue;
+        }
+        if (d.type != FS_TYPE_EF_TRANSPARENT || d.size == 0u) {
+            continue;
+        }
+        used += (uint32_t)d.size;
+    }
+    return (used < flash) ? (flash - used) : 0u;
 }

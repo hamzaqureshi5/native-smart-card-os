@@ -199,29 +199,174 @@ TEST(unknown_layout_version_refuses_to_mount)
     CHECK_EQ(fs_store_mount(), FS_ERR_VERSION);
 }
 
-TEST(allocation_is_bounded_and_monotonic)
+TEST(allocation_finds_a_free_extent_and_reserves_nothing)
 {
+    /*
+     * REWRITTEN, because the previous version hung for ten minutes.
+     *
+     * It called fs_store_alloc_data() repeatedly without ever writing a
+     * descriptor, relying on the old bump allocator's side effect of advancing
+     * `data_top`. The allocator now derives its answer from the live
+     * descriptors and reserves nothing, so every call returned offset 0, the
+     * free count never moved, and `while (free >= 30000)` never ended.
+     *
+     * The hang was the test's assumption, not a bug in the allocator -- but the
+     * old NAME invited the assumption, which is why the function is now
+     * fs_store_find_free_data(). This test pins the real contract.
+     */
     vcard_power_off();
     CHECK_EQ(vcard_power_on(), HAL_OK);
     CHECK_EQ(fs_store_format(), FS_OK);
 
-    uint32_t a = 0u, b = 0u;
-    CHECK_EQ(fs_store_alloc_data(100u, &a), FS_OK);
-    CHECK_EQ(fs_store_alloc_data(100u, &b), FS_OK);
+    /* Nothing is allocated, so the first fit is offset 0 -- and asking twice
+     * gives the SAME answer, because asking is not taking. */
+    uint32_t a = 0xFFFFFFFFu, b = 0xFFFFFFFFu;
+    CHECK_EQ(fs_store_find_free_data(100u, &a), FS_OK);
+    CHECK_EQ(fs_store_find_free_data(100u, &b), FS_OK);
     CHECK_EQ(a, 0);
-    CHECK_EQ(b, 100); /* no overlap */
-    CHECK_EQ(fs_store_data_free(), SCOS_FLASH_BYTES - 200u);
+    CHECK_EQ(b, 0);
+    CHECK_EQ(fs_store_data_free(), SCOS_FLASH_BYTES);
 
-    /* Exhaustion must be reported, never wrapped into a small offset. */
-    uint32_t huge = 0u;
-    CHECK_EQ(fs_store_alloc_data(65535u, &huge), FS_OK);
-    while (fs_store_data_free() >= 30000u) {
-        CHECK_EQ(fs_store_alloc_data(30000u, &huge), FS_OK);
+    /* Writing a descriptor is what takes the space. */
+    fs_descriptor d;
+    os_memset(&d, 0, sizeof(d));
+    d.file_id   = 0x3F00u;
+    d.type      = FS_TYPE_MF;
+    d.lifecycle = FS_LC_ACTIVATED;
+    d.parent    = FS_NO_PARENT;
+    d.sfi       = FS_NO_SFI;
+    CHECK_EQ(fs_store_write_desc(0u, &d), FS_OK);
+
+    os_memset(&d, 0, sizeof(d));
+    d.file_id     = 0x2A01u;
+    d.type        = FS_TYPE_EF_TRANSPARENT;
+    d.lifecycle   = FS_LC_ACTIVATED;
+    d.parent      = 0u;
+    d.size        = 100u;
+    d.data_offset = a;
+    d.sfi         = FS_NO_SFI;
+    CHECK_EQ(fs_store_write_desc(1u, &d), FS_OK);
+
+    CHECK_EQ(fs_store_data_free(), SCOS_FLASH_BYTES - 100u);
+
+    /* Now the next fit is past it. */
+    uint32_t c = 0u;
+    CHECK_EQ(fs_store_find_free_data(100u, &c), FS_OK);
+    CHECK_EQ(c, 100);
+}
+
+TEST(a_deleted_extent_is_reused_rather_than_leaked)
+{
+    /*
+     * THE M4 FIX, and the reason the allocator changed at all.
+     *
+     * With the bump allocator, DELETE FILE freed the descriptor slot and
+     * stranded the EF's data bytes for good -- so 32 slots against a 256 KB
+     * data area meant repeated create/delete cycles exhausted the space.
+     * test_create.c asserted that leak as a known limitation from M2b onward,
+     * waiting for transactions to make a fix safe.
+     */
+    vcard_power_off();
+    CHECK_EQ(vcard_power_on(), HAL_OK);
+    CHECK_EQ(fs_store_format(), FS_OK);
+
+    fs_descriptor mf;
+    os_memset(&mf, 0, sizeof(mf));
+    mf.file_id   = 0x3F00u;
+    mf.type      = FS_TYPE_MF;
+    mf.lifecycle = FS_LC_ACTIVATED;
+    mf.parent    = FS_NO_PARENT;
+    mf.sfi       = FS_NO_SFI;
+    CHECK_EQ(fs_store_write_desc(0u, &mf), FS_OK);
+
+    /* Two EFs, back to back. */
+    uint32_t o1 = 0u, o2 = 0u;
+    CHECK_EQ(fs_store_find_free_data(500u, &o1), FS_OK);
+    fs_descriptor e1;
+    os_memset(&e1, 0, sizeof(e1));
+    e1.file_id     = 0x2A01u;
+    e1.type        = FS_TYPE_EF_TRANSPARENT;
+    e1.lifecycle   = FS_LC_ACTIVATED;
+    e1.parent      = 0u;
+    e1.size        = 500u;
+    e1.data_offset = o1;
+    e1.sfi         = FS_NO_SFI;
+    CHECK_EQ(fs_store_write_desc(1u, &e1), FS_OK);
+
+    CHECK_EQ(fs_store_find_free_data(500u, &o2), FS_OK);
+    CHECK_EQ(o2, 500); /* past the first */
+    fs_descriptor e2 = e1;
+    e2.file_id       = 0x2A02u;
+    e2.data_offset   = o2;
+    CHECK_EQ(fs_store_write_desc(2u, &e2), FS_OK);
+
+    CHECK_EQ(fs_store_data_free(), SCOS_FLASH_BYTES - 1000u);
+
+    /* Free the FIRST one. Its extent must become available again. */
+    CHECK_EQ(fs_store_free_desc(1u), FS_OK);
+    CHECK_EQ(fs_store_data_free(), SCOS_FLASH_BYTES - 500u);
+
+    uint32_t o3 = 0u;
+    CHECK_EQ(fs_store_find_free_data(500u, &o3), FS_OK);
+    CHECK_HEX(o3, o1); /* THE POINT: the hole is reused, not skipped */
+
+    /* And a request too big for the hole goes past the second file rather than
+     * overlapping it -- first fit means first that FITS. */
+    uint32_t o4 = 0u;
+    CHECK_EQ(fs_store_find_free_data(600u, &o4), FS_OK);
+    CHECK_EQ(o4, 1000);
+}
+
+TEST(exhaustion_is_reported_not_wrapped)
+{
+    /* A size that cannot fit must be refused, never wrapped into a small
+     * offset that overlaps a live file. */
+    vcard_power_off();
+    CHECK_EQ(vcard_power_on(), HAL_OK);
+    CHECK_EQ(fs_store_format(), FS_OK);
+
+    fs_descriptor mf;
+    os_memset(&mf, 0, sizeof(mf));
+    mf.file_id   = 0x3F00u;
+    mf.type      = FS_TYPE_MF;
+    mf.lifecycle = FS_LC_ACTIVATED;
+    mf.parent    = FS_NO_PARENT;
+    mf.sfi       = FS_NO_SFI;
+    CHECK_EQ(fs_store_write_desc(0u, &mf), FS_OK);
+
+    /* Fill the data area with max-size EFs until the slots run out, writing a
+     * descriptor each time so the space is genuinely taken. Bounded by
+     * FS_MAX_FILES, so this cannot loop for ever the way its predecessor did. */
+    uint16_t placed = 0u;
+    for (uint16_t idx = 1u; idx < FS_MAX_FILES; idx++) {
+        uint32_t off = 0u;
+        if (fs_store_find_free_data(FS_MAX_EF_SIZE, &off) != FS_OK) {
+            break;
+        }
+        fs_descriptor e;
+        os_memset(&e, 0, sizeof(e));
+        e.file_id     = (uint16_t)(0x2B00u + idx);
+        e.type        = FS_TYPE_EF_TRANSPARENT;
+        e.lifecycle   = FS_LC_ACTIVATED;
+        e.parent      = 0u;
+        e.size        = FS_MAX_EF_SIZE;
+        e.data_offset = off;
+        e.sfi         = FS_NO_SFI;
+        CHECK_EQ(fs_store_write_desc(idx, &e), FS_OK);
+        placed++;
     }
+    CHECK(placed > 0u);
+
+    /* Whatever is left, one more max-size EF must not fit -- and asking must
+     * not corrupt anything. */
     const uint32_t left = fs_store_data_free();
-    CHECK_EQ(fs_store_alloc_data((uint16_t)(left + 1u), &huge),
-             FS_ERR_NO_SPACE);
-    CHECK_EQ(fs_store_data_free(), left); /* a failed alloc consumes nothing */
+    uint32_t       off  = 0u;
+    if (left < FS_MAX_EF_SIZE) {
+        CHECK_EQ(fs_store_find_free_data(FS_MAX_EF_SIZE, &off),
+                 FS_ERR_NO_SPACE);
+        CHECK_EQ(off, 0); /* zeroed on failure, not left as a stale offset */
+    }
+    CHECK_EQ(fs_store_data_free(), left); /* asking consumes nothing */
 }
 
 /* ======================================================== logical layer === */
@@ -947,7 +1092,9 @@ int main(void)
     RUN(corrupt_descriptor_is_detected_not_used);
     RUN(corrupt_superblock_refuses_to_mount);
     RUN(unknown_layout_version_refuses_to_mount);
-    RUN(allocation_is_bounded_and_monotonic);
+    RUN(allocation_finds_a_free_extent_and_reserves_nothing);
+    RUN(a_deleted_extent_is_reused_rather_than_leaked);
+    RUN(exhaustion_is_reported_not_wrapped);
 
     RUN(factory_layout_is_as_documented);
     RUN(ef_atr_says_what_the_card_can_do);

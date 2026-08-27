@@ -121,10 +121,15 @@ fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
  *   - only a direct child of the current DF, never a global search, for the
  *     same isolation reason fs_select_by_fid has no global search
  *
- * KNOWN LIMITATION: the EF's data bytes are NOT reclaimed. fs_store's data
- * area is a bump allocator, so deleting a file frees its descriptor slot but
- * leaks its data space. Compaction needs a way to move data atomically, which
- * needs M4. fs_store_data_free() therefore only ever decreases.
+ * The EF's data bytes ARE reclaimed, as of M4. This used to read "KNOWN
+ * LIMITATION: the EF's data bytes are NOT reclaimed" -- fs_store's data area
+ * was a bump allocator, so deleting freed the descriptor slot and stranded the
+ * data space, and the fix was expected to be compaction, which needs atomic
+ * data movement.
+ *
+ * It was not compaction in the end. The allocator derives free space from the
+ * live descriptors, so a freed slot's extent simply stops being in use and the
+ * next file that fits reuses it. fs_store_data_free() goes back up on delete.
  *
  * If the deleted file was selected, `sel` is moved back to the containing DF --
  * leaving a selection pointing at a freed slot would let the next command act

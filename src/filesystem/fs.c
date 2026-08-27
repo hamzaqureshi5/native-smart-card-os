@@ -644,7 +644,7 @@ fs_status fs_personalise(void)
 
         if (layout[i].type == FS_TYPE_EF_TRANSPARENT) {
             uint32_t offset = 0u;
-            st              = fs_store_alloc_data(layout[i].size, &offset);
+            st              = fs_store_find_free_data(layout[i].size, &offset);
             if (st != FS_OK) {
                 return st;
             }
@@ -882,7 +882,7 @@ fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
 
     if (req->type == FS_TYPE_EF_TRANSPARENT) {
         uint32_t offset = 0u;
-        st              = fs_store_alloc_data(req->size, &offset);
+        st              = fs_store_find_free_data(req->size, &offset);
         if (st != FS_OK) {
             /* Out of data space. The descriptor slot was never written, so
              * nothing needs undoing -- which is exactly why the allocation

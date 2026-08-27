@@ -59,15 +59,25 @@ uint16_t fs_store_find_free_slot(void);
 
 /* ---------------------------------------------------------------- EF data -- */
 
-/* Bump-allocate `size` bytes of FLASH for an EF's contents.
- *
- * KNOWN LIMITATION: there is no free list. Space released by a deleted file is
- * not reclaimed until a compaction pass exists, and compaction cannot be
- * written safely before transactions (M4) -- a power loss during compaction
- * without a journal would destroy the filesystem. Documented in
- * docs/filesystem.md rather than hidden.
+/* Space released by a deleted file IS reclaimed, as of M4 -- see
+ * fs_store_find_free_data() below. There is no free list and no compaction
+ * pass: the live descriptors ARE the record of what is in use, so a freed slot
+ * needs no separate bookkeeping to stop reserving its extent.
  */
-fs_status fs_store_alloc_data(uint16_t size, uint32_t *out_offset);
+/*
+ * Where would `size` bytes of EF data fit? RESERVES NOTHING.
+ *
+ * First fit over the live descriptors. The caller reserves the space by writing
+ * a descriptor that points at the returned offset -- the descriptor IS the
+ * record of ownership, so there is no second place for it to be recorded and no
+ * window in which the two disagree.
+ *
+ * Consequence worth stating: calling this twice without writing a descriptor in
+ * between returns the SAME offset. Both callers write immediately. The previous
+ * name, fs_store_alloc_data, implied a reservation and hung a test that relied
+ * on one.
+ */
+fs_status fs_store_find_free_data(uint16_t size, uint32_t *out_offset);
 
 fs_status fs_store_read_data(uint32_t offset, uint16_t len, void *dst);
 fs_status fs_store_write_data(uint32_t offset, uint16_t len, const void *src);
