@@ -49,7 +49,6 @@
 
 #include "fuzz_targets.h"
 
-#include <assert.h>
 #include <string.h>
 
 static scos_kernel g_card;
@@ -66,11 +65,11 @@ static void check_tree(void)
     }
 
     /* 1. the root. */
-    assert(live[0]);
-    assert(d[0].type == FS_TYPE_MF);
-    assert(d[0].file_id == FS_FID_MF);
-    assert(d[0].parent == FS_NO_PARENT);
-    assert(d[0].lifecycle == FS_LC_ACTIVATED);
+    FUZZ_CHECK(live[0]);
+    FUZZ_CHECK(d[0].type == FS_TYPE_MF);
+    FUZZ_CHECK(d[0].file_id == FS_FID_MF);
+    FUZZ_CHECK(d[0].parent == FS_NO_PARENT);
+    FUZZ_CHECK(d[0].lifecycle == FS_LC_ACTIVATED);
 
     for (uint16_t i = 0; i < FS_MAX_FILES; i++) {
         if (!live[i]) {
@@ -83,14 +82,14 @@ static void check_tree(void)
             uint16_t p     = d[i].parent;
             uint16_t depth = 0u;
             while (p != FS_NO_PARENT) {
-                assert(p < FS_MAX_FILES);
-                assert(live[p]);
-                assert(d[p].type == FS_TYPE_MF || d[p].type == FS_TYPE_DF);
+                FUZZ_CHECK(p < FS_MAX_FILES);
+                FUZZ_CHECK(live[p]);
+                FUZZ_CHECK(d[p].type == FS_TYPE_MF || d[p].type == FS_TYPE_DF);
                 p = d[p].parent;
                 depth++;
-                assert(depth <= FS_MAX_DEPTH);
+                FUZZ_CHECK(depth <= FS_MAX_DEPTH);
             }
-            assert(depth > 0u); /* reached the root, did not start there */
+            FUZZ_CHECK(depth > 0u); /* reached the root, did not start there */
         }
 
         for (uint16_t j = (uint16_t)(i + 1u); j < FS_MAX_FILES; j++) {
@@ -99,10 +98,10 @@ static void check_tree(void)
             }
             /* 4. unique identifier within a parent. */
             if (d[i].parent == d[j].parent) {
-                assert(d[i].file_id != d[j].file_id);
+                FUZZ_CHECK(d[i].file_id != d[j].file_id);
                 /* 5. unique short identifier within a parent. */
                 if (d[i].sfi != FS_NO_SFI) {
-                    assert(d[i].sfi != d[j].sfi);
+                    FUZZ_CHECK(d[i].sfi != d[j].sfi);
                 }
             }
             /* 6. no two EFs share a byte of data space. */
@@ -112,15 +111,16 @@ static void check_tree(void)
                 const uint64_t a1 = a0 + d[i].size;
                 const uint64_t b0 = d[j].data_offset;
                 const uint64_t b1 = b0 + d[j].size;
-                assert(a1 <= b0 || b1 <= a0);
+                FUZZ_CHECK(a1 <= b0 || b1 <= a0);
             }
         }
 
         /* 7. within the flash region. */
         if (d[i].type == FS_TYPE_EF_TRANSPARENT) {
             const uint32_t flash = hal_nvm_size(HAL_NVM_FLASH);
-            assert((uint64_t)d[i].data_offset + d[i].size <= (uint64_t)flash);
-            assert(d[i].size > 0u);
+            FUZZ_CHECK((uint64_t)d[i].data_offset + d[i].size <=
+                       (uint64_t)flash);
+            FUZZ_CHECK(d[i].size > 0u);
         }
     }
 }
@@ -136,11 +136,11 @@ static uint16_t send(const uint8_t *cmd, uint16_t len)
         SCOS_OK) {
         return 0u;
     }
-    assert(rsp_len >= 2u);
+    FUZZ_CHECK(rsp_len >= 2u);
     const uint16_t sw =
         (uint16_t)(((uint16_t)rsp[rsp_len - 2u] << 8) | rsp[rsp_len - 1u]);
     /* A card must always answer something recognisable. */
-    assert((uint8_t)(sw >> 8) >= 0x61u);
+    FUZZ_CHECK((uint8_t)(sw >> 8) >= 0x61u);
     return sw;
 }
 
