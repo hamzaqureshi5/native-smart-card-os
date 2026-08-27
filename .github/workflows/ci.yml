@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: MIT
 #
-# Minimal CI: build and test the three configurations that matter.
+# Minimal CI: build and test the configurations that matter.
 #
 #   native   the OS on x86 with AddressSanitizer + UBSan, and the layering
-#            tripwire. This is where memory bugs are caught.
+#            tripwire. This is where memory bugs are caught. Also builds and
+#            tests RELEASE in the same job -- -O2 enables warnings -O0 cannot
+#            produce, NDEBUG removes every assert(), and os_fits_in_rom only
+#            runs unsanitized. Both facts have already caught something.
 #   arm      the same OS as real Cortex-M3 machine code, booted through the
 #            boot ROM on QEMU. This is where the memory map is enforced.
 #   format   clang-format, at a PINNED version.
@@ -16,8 +19,15 @@
 #            link. That is the project's central architectural claim, checked
 #            by a machine instead of by review.
 #
+# Every job that builds checks out the mbedTLS submodule shallowly. Without it
+# the build stops with a FATAL_ERROR, which is the right behaviour -- a missing
+# crypto backend must not be something a build silently works around -- but it
+# means CI has to ask for it. `format` does not: it only touches
+# src/include/tests/simulator and explicitly prunes third_party, because
+# reformatting a vendored library would turn the submodule into a fork.
+#
 # Deliberately not here: caching, matrices, coverage, release artefacts. The
-# whole suite runs in well under a minute; complexity in CI is complexity that
+# whole suite runs in a couple of minutes; complexity in CI is complexity that
 # fails for reasons unrelated to the code.
 
 name: ci
@@ -53,6 +63,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # mbedTLS is a submodule and the build refuses without it. Shallow:
+          # only the pinned commit is needed, and the full history is ~50 MB.
+          submodules: true
+          fetch-depth: 1
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -66,11 +81,35 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      # Release in the SAME job rather than a sixth one, because it is two
+      # short steps and the point is coverage, not parallelism.
+      #
+      # Not the same check as Debug, in two ways that have both already caught
+      # something. -O2 enables warnings -O0 cannot produce, and NDEBUG removes
+      # every assert() -- which is how a Release build that had never been
+      # compiled turned out to be broken, with the fuzz targets' invariants
+      # silently compiled away. And os_fits_in_rom only runs here: measuring
+      # code size under ASan measures the sanitizer.
+      - name: Configure Release
+        run: |
+          cmake -S . -B build-rel \
+            -DCMAKE_BUILD_TYPE=Release -DSCOS_SANITIZE=OFF
+
+      - name: Build and test Release
+        run: |
+          cmake --build build-rel -j"$(nproc)"
+          ctest --test-dir build-rel --output-on-failure
+
   arm:
     name: ARM Cortex-M3 on QEMU
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # mbedTLS is a submodule and the build refuses without it. Shallow:
+          # only the pinned commit is needed, and the full history is ~50 MB.
+          submodules: true
+          fetch-depth: 1
 
       - name: Install the cross toolchain and emulator
         run: |
@@ -105,6 +144,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # mbedTLS is a submodule and the build refuses without it. Shallow:
+          # only the pinned commit is needed, and the full history is ~50 MB.
+          submodules: true
+          fetch-depth: 1
 
       - name: Install the cross toolchain
         run: |
@@ -128,6 +172,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # mbedTLS is a submodule and the build refuses without it. Shallow:
+          # only the pinned commit is needed, and the full history is ~50 MB.
+          submodules: true
+          fetch-depth: 1
 
       # SCOS_ACK_S3M228A_STUB is required because src/hal/s3m228a/ contains no
       # part-specific code and every function fails at run time. It exists
