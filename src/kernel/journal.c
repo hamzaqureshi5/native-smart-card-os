@@ -259,8 +259,9 @@ scos_txn_status scos_txn_commit(void)
         return SCOS_TXN_ERR_NONE_OPEN;
     }
     /*
-     * One byte, and after this instant the transaction is durable. Everything
-     * it wrote is already in place -- that is what undo journaling buys.
+     * THE COMMIT POINT is this one byte and nothing else. After it, the
+     * transaction is durable: everything it wrote is already in place, which is
+     * what undo journaling buys.
      */
     const scos_txn_status st = set_state(TXN_STATE_COMMITTED);
     if (st != SCOS_TXN_OK) {
@@ -268,10 +269,26 @@ scos_txn_status scos_txn_commit(void)
     }
     g_txn.open = false;
 
-    /* Reset to EMPTY so the next transaction starts from a known state. If
-     * power goes between the two writes the journal reads COMMITTED, and
-     * recovery leaves the data alone -- correct. */
-    return scos_txn_format();
+    /*
+     * Resetting to EMPTY is HOUSEKEEPING, and its failure is NOT a commit
+     * failure. This is the third bug the two-dimensional interruption sweep
+     * found, and the most misleading of them.
+     *
+     * The old code returned scos_txn_format()'s status, so a write cut during
+     * the format made commit report failure -- and scos_process turned that
+     * into 6581. But the state byte had already reached COMMITTED, so the
+     * transaction HAD committed and the file HAD been created. The card
+     * reported failure for an operation that succeeded, which is worse than
+     * either outcome on its own: a caller that believes a file was not created
+     * will not go looking for it.
+     *
+     * If this format is interrupted, recovery finds either a COMMITTED state or
+     * a header failing its CRC. Both leave the data alone -- correctly -- and
+     * both are then formatted. So the failure is genuinely recoverable and
+     * genuinely not the caller's business.
+     */
+    (void)scos_txn_format();
+    return SCOS_TXN_OK;
 }
 
 /* Undo every entry, newest first. */
@@ -379,10 +396,39 @@ scos_txn_status scos_txn_abort(void)
     }
     const scos_txn_status st = rollback(g_txn.count, g_txn.used);
     g_txn.open               = false;
-    /* Format even if the rollback failed: leaving an OPEN journal behind would
-     * make the next boot try the same failing rollback for ever. The data may
-     * be inconsistent, and that is reported -- but the card is not bricked. */
-    (void)scos_txn_format();
+    /*
+     * WHETHER TO KEEP THE UNDO LOG DEPENDS ON WHY THE ROLLBACK FAILED, and
+     * getting here took two wrong answers.
+     *
+     * First version: always format. Second version: format only on success,
+     * reasoning that a failed rollback means power is going and the next boot
+     * should retry. Both are too simple, and the second is unobservable in the
+     * case it was written for -- if the rollback's writes are failing, the
+     * format's write fails too, so the journal stays open regardless. A
+     * mutation reverting it broke no test, which is what exposed the confusion.
+     *
+     * The two failure modes want opposite treatment:
+     *
+     *   NVM error      power is going. Transient. Keep the log; the next boot
+     *                  retries with power restored and will almost certainly
+     *                  succeed. (Also self-enforcing: the format cannot happen
+     *                  either.)
+     *
+     *   CORRUPT        the entry stream is damaged while writes still work.
+     *                  Retrying is FUTILE and keeping the log is actively
+     *                  harmful: every boot would attempt the same failing
+     *                  rollback, recovery would keep failing, and the card
+     *                  would come up in FS_ERROR answering 6581 for ever. That
+     *                  is the "for ever" case the first version's comment
+     *                  worried about, and it was right to.
+     *
+     * So discard on CORRUPT, keep on anything else. The caller still gets the
+     * error either way, so a damaged card is reported rather than hidden -- it
+     * is simply not bricked as well.
+     */
+    if (st == SCOS_TXN_OK || st == SCOS_TXN_ERR_CORRUPT) {
+        (void)scos_txn_format();
+    }
     return st;
 }
 

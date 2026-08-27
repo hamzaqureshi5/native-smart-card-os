@@ -240,51 +240,45 @@ TEST(the_fault_hook_actually_cuts_a_write)
 
 /* ============================== the headline: every byte offset =========== */
 
-TEST(create_file_interrupted_at_every_byte_leaves_no_trace)
+TEST(create_file_interrupted_at_any_write_leaves_no_trace)
 {
     /*
-     * THE M4 TEST.
+     * THE M4 TEST, and the second version of it.
      *
-     * CREATE FILE writes a descriptor and updates the superblock's allocation
-     * pointer. For every byte offset at which the write can be cut, the card
-     * must come back with the file absent and the allocator unchanged -- never
-     * with a descriptor pointing at data space nobody owns, and never with the
-     * allocator advanced past bytes no file claims.
+     * The first version swept BYTE OFFSETS only -- vcard_fault_after_bytes(n)
+     * for n in 0..40 -- reported success at every one, and was measuring
+     * nothing. Since M4 wrapped every command in a transaction, the first NVM
+     * write a command performs is the journal's own header, so every arming
+     * landed there: scos_txn_begin() failed, the command aborted before
+     * touching any data, and "the data is unchanged" was true because the data
+     * write had never been attempted.
      *
-     * The loop re-personalises a card per offset, cuts the write there, then
-     * runs recovery exactly as a boot would, and compares the whole EEPROM
-     * against the snapshot taken before the command. Comparing the whole region
-     * rather than the fields the test author thought of is the point: a
-     * consistency bug in a field nobody remembered is precisely the bug that
-     * survives review.
+     * It came to light by disabling recovery entirely and finding the tests
+     * still passed. A test that cannot fail is worse than no test, because it
+     * occupies the space where a real one would go.
+     *
+     * So the sweep is two-dimensional: for each WRITE the command performs, for
+     * each BYTE OFFSET within it. And `hold` is set, so the abort's own writes
+     * fail too -- otherwise the in-session rollback fixes everything and the
+     * next boot has nothing to recover, which is the in-session path rather
+     * than the tear path.
      */
     static uint8_t before[SCOS_EE_TXN_BASE];
     static uint8_t after[SCOS_EE_TXN_BASE];
 
-    /*
-     * CREATE FILE for a 16-byte EF 2B01, with every length DERIVED.
-     *
-     * The first version of this had the Lc typed by hand and it was wrong --
-     * for the eighth time in this project's history, which is why
-     * tests/unit/test_create.c and tools/card both grew length-deriving
-     * helpers. Doing it by hand once more produced 41 failures that had
-     * nothing to do with transactions.
-     */
+    /* Every length derived. Hand-typed Lc was wrong here once already. */
     uint8_t  create[32];
     uint16_t cn = 0u;
     {
         uint8_t  inner[24];
         uint16_t in = 0u;
-        /* 82: file descriptor byte, transparent EF */
         inner[in++] = 0x82u;
         inner[in++] = 0x01u;
         inner[in++] = 0x01u;
-        /* 83: file identifier */
         inner[in++] = 0x83u;
         inner[in++] = 0x02u;
         inner[in++] = 0x2Bu;
         inner[in++] = 0x01u;
-        /* 80: data bytes */
         inner[in++] = 0x80u;
         inner[in++] = 0x02u;
         inner[in++] = 0x00u;
@@ -294,7 +288,7 @@ TEST(create_file_interrupted_at_every_byte_leaves_no_trace)
         create[cn++] = 0xE0u;
         create[cn++] = 0x00u;
         create[cn++] = 0x00u;
-        create[cn++] = (uint8_t)(in + 2u); /* Lc: template tag + length */
+        create[cn++] = (uint8_t)(in + 2u);
         create[cn++] = 0x62u;
         create[cn++] = (uint8_t)in;
         for (uint16_t i = 0; i < in; i++) {
@@ -303,91 +297,160 @@ TEST(create_file_interrupted_at_every_byte_leaves_no_trace)
     }
 
     unsigned interrupted = 0u;
-    for (uint32_t cut = 0u; cut < 40u; cut++) {
-        fresh();
-        snapshot(before, sizeof(before));
+    for (uint32_t skip = 0u; skip < 12u; skip++) {
+        for (uint32_t cut = 0u; cut < 6u; cut++) {
+            fresh();
+            snapshot(before, sizeof(before));
 
-        vcard_fault_after_bytes(cut);
-        const uint16_t sw = send(create, cn);
+            vcard_fault_hold(true);
+            vcard_fault_at_write(skip, cut);
+            const uint16_t sw = send(create, cn);
 
-        if (!vcard_fault_fired()) {
-            /* The cut was beyond every write this command made, so it
-             * completed. Nothing to recover; skip rather than pretend. */
-            CHECK_HEX(sw, SW_OK);
-            continue;
+            if (!vcard_fault_fired()) {
+                /* The command made fewer than `skip` writes, so it completed.
+                 * Nothing to recover; skip rather than pretend. */
+                CHECK_HEX(sw, SW_OK);
+                continue;
+            }
+            interrupted++;
+
+            /* Boot again. Recovery runs inside scos_init(). */
+            vcard_fault_clear();
+            CHECK_EQ(scos_init(&g_card), SCOS_OK);
+
+            const uint8_t  sel[] = { 0x00u, 0xA4u, 0x02u, 0x0Cu,
+                                     0x02u, 0x2Bu, 0x01u };
+            const uint16_t found = send(sel, (uint16_t)sizeof(sel));
+
+            /*
+             * THE INVARIANT, and getting it right took three tries.
+             *
+             * It is NOT "an interrupted command fails". A cut can land on the
+             * housekeeping write that follows the commit, by which time the
+             * transaction is durable and the file legitimately exists -- so the
+             * command correctly reports success. Asserting failure there was
+             * wrong, and asserting it is what made the third bug in this area
+             * look like a test failure rather than the code defect it was.
+             *
+             * The real property is ALL-OR-NOTHING, in both directions:
+             *
+             *   reported success  ->  the file is there
+             *   reported failure  ->  the card is byte-identical to before
+             *
+             * Never success without the file, and never failure with a trace
+             * left behind. That is what a transaction means, and it is the only
+             * claim a caller can act on.
+             */
+            if (sw == SW_OK) {
+                CHECK_HEX(found, SW_OK);
+            } else {
+                CHECK_HEX(found, SW_FILE_NOT_FOUND);
+                snapshot(after, sizeof(after));
+                CHECK(same_except_journal(before, after, sizeof(before)));
+            }
         }
-        interrupted++;
-
-        /* The command must NOT have reported success after losing power. */
-        CHECK(sw != SW_OK);
-
-        /* Boot the card again: recovery runs inside scos_init(). */
-        vcard_fault_clear();
-        CHECK_EQ(scos_init(&g_card), SCOS_OK);
-
-        snapshot(after, sizeof(after));
-        CHECK(same_except_journal(before, after, sizeof(before)));
-
-        /* And the file is genuinely absent -- not merely byte-identical by
-         * luck. A SELECT of it must fail. */
-        const uint8_t sel[] = {
-            0x00u, 0xA4u, 0x02u, 0x0Cu, 0x02u, 0x2Bu, 0x01u
-        };
-        CHECK_HEX(send(sel, (uint16_t)sizeof(sel)), SW_FILE_NOT_FOUND);
     }
 
-    /* The loop is worthless if no cut ever landed. */
-    CHECK(interrupted > 0u);
+    /* The sweep is worthless if no cut ever landed, and worth little if only
+     * one did -- CREATE FILE writes a descriptor AND the superblock, so a
+     * meaningful sweep interrupts several distinct writes. */
+    CHECK(interrupted > 10u);
 }
 
-TEST(update_binary_interrupted_at_every_byte_leaves_the_old_data)
+TEST(update_binary_interrupted_at_any_write_leaves_the_old_data)
 {
     /*
-     * The same property for a DATA write rather than a metadata one. A partial
-     * UPDATE BINARY is the case a user notices: half a record written is not a
-     * record, and a card that returns an error while leaving the file half
-     * modified has lost the caller's data without saying so.
+     * The same two-dimensional sweep for a DATA write rather than a metadata
+     * one. A partial UPDATE BINARY is the case a user notices: half a record
+     * written is not a record, and a card that returns an error while leaving
+     * the file half modified has lost the caller's data without saying so.
      */
     static uint8_t original[8];
 
     unsigned interrupted = 0u;
-    for (uint32_t cut = 0u; cut < 24u; cut++) {
-        fresh();
+    for (uint32_t skip = 0u; skip < 10u; skip++) {
+        for (uint32_t cut = 0u; cut < 5u; cut++) {
+            fresh();
 
-        /* Put a known value in 2F00 and make it durable outside any
-         * transaction, so it is the state the rollback must return to. */
-        const uint8_t sel[] = {
-            0x00u, 0xA4u, 0x02u, 0x0Cu, 0x02u, 0x2Fu, 0x00u
-        };
-        CHECK_HEX(send(sel, (uint16_t)sizeof(sel)), SW_OK);
-        const uint8_t seed[] = { 0x00u, 0xD6u, 0x00u, 0x00u, 0x08u,
-                                 0x11u, 0x22u, 0x33u, 0x44u, 0x55u,
-                                 0x66u, 0x77u, 0x88u };
-        CHECK_HEX(send(seed, (uint16_t)sizeof(seed)), SW_OK);
-        CHECK_EQ(hal_nvm_read(HAL_NVM_FLASH, 0u, original, 8u), HAL_OK);
+            const uint8_t sel[] = { 0x00u, 0xA4u, 0x02u, 0x0Cu,
+                                    0x02u, 0x2Fu, 0x00u };
+            CHECK_HEX(send(sel, (uint16_t)sizeof(sel)), SW_OK);
+            const uint8_t seed[] = { 0x00u, 0xD6u, 0x00u, 0x00u, 0x08u,
+                                     0x11u, 0x22u, 0x33u, 0x44u, 0x55u,
+                                     0x66u, 0x77u, 0x88u };
+            CHECK_HEX(send(seed, (uint16_t)sizeof(seed)), SW_OK);
+            CHECK_EQ(hal_nvm_read(HAL_NVM_FLASH, 0u, original, 8u), HAL_OK);
 
-        const uint8_t over[] = { 0x00u, 0xD6u, 0x00u, 0x00u, 0x08u,
-                                 0xFFu, 0xFEu, 0xFDu, 0xFCu, 0xFBu,
-                                 0xFAu, 0xF9u, 0xF8u };
-        vcard_fault_after_bytes(cut);
-        const uint16_t sw = send(over, (uint16_t)sizeof(over));
+            const uint8_t over[] = { 0x00u, 0xD6u, 0x00u, 0x00u, 0x08u,
+                                     0xFFu, 0xFEu, 0xFDu, 0xFCu, 0xFBu,
+                                     0xFAu, 0xF9u, 0xF8u };
+            vcard_fault_hold(true);
+            vcard_fault_at_write(skip, cut);
+            const uint16_t sw = send(over, (uint16_t)sizeof(over));
 
-        if (!vcard_fault_fired()) {
-            continue;
-        }
-        interrupted++;
-        CHECK(sw != SW_OK);
+            if (!vcard_fault_fired()) {
+                continue;
+            }
+            interrupted++;
 
-        vcard_fault_clear();
-        CHECK_EQ(scos_init(&g_card), SCOS_OK);
+            vcard_fault_clear();
+            CHECK_EQ(scos_init(&g_card), SCOS_OK);
 
-        uint8_t got[8];
-        CHECK_EQ(hal_nvm_read(HAL_NVM_FLASH, 0u, got, 8u), HAL_OK);
-        for (unsigned i = 0; i < 8u; i++) {
-            CHECK_HEX(got[i], original[i]);
+            uint8_t got[8];
+            CHECK_EQ(hal_nvm_read(HAL_NVM_FLASH, 0u, got, 8u), HAL_OK);
+
+            /* Same two-way invariant: the write happened completely, or not at
+             * all. Half a record is the one outcome that must be impossible. */
+            const uint8_t  updated[8] = { 0xFFu, 0xFEu, 0xFDu, 0xFCu,
+                                          0xFBu, 0xFAu, 0xF9u, 0xF8u };
+            const uint8_t *want       = (sw == SW_OK) ? updated : original;
+            for (unsigned i = 0; i < 8u; i++) {
+                CHECK_HEX(got[i], want[i]);
+            }
         }
     }
-    CHECK(interrupted > 0u);
+    CHECK(interrupted > 10u);
+}
+
+TEST(the_sweep_would_notice_if_recovery_stopped_working)
+{
+    /*
+     * A canary for the tests above, and it exists because they once could not
+     * fail.
+     *
+     * This constructs the one situation the sweeps rely on -- a transaction
+     * left OPEN with data already modified -- by hand, and asserts that
+     * recovery is what puts it right. If recovery ever becomes a no-op, THIS
+     * fails immediately and unambiguously, rather than the sweeps silently
+     * going green because the interruption never reached any data.
+     */
+    fresh();
+    const uint8_t original[4] = { 0x61u, 0x62u, 0x63u, 0x64u };
+    CHECK_EQ(
+        hal_nvm_write(HAL_NVM_EEPROM, SCOS_EE_SEC_BASE + 240u, original, 4u),
+        HAL_OK);
+
+    CHECK_EQ(scos_txn_begin(), SCOS_TXN_OK);
+    const uint8_t v[4] = { 0x71u, 0x72u, 0x73u, 0x74u };
+    CHECK_EQ(scos_nvm_write(HAL_NVM_EEPROM, SCOS_EE_SEC_BASE + 240u, v, 4u),
+             HAL_OK);
+
+    /* The new bytes really are in place -- so the ONLY thing that can restore
+     * them is the journal. */
+    uint8_t mid[4];
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, SCOS_EE_SEC_BASE + 240u, mid, 4u),
+             HAL_OK);
+    CHECK_HEX(mid[0], 0x71);
+
+    /* No commit, no abort: exactly what a tear leaves. Recovery must undo it. */
+    CHECK_EQ(scos_txn_recover(), SCOS_TXN_OK);
+
+    uint8_t got[4];
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, SCOS_EE_SEC_BASE + 240u, got, 4u),
+             HAL_OK);
+    for (unsigned i = 0; i < 4u; i++) {
+        CHECK_HEX(got[i], original[i]);
+    }
 }
 
 /* ============================================ the journal's own integrity = */
@@ -468,6 +531,106 @@ TEST(a_half_written_state_byte_rolls_back)
     for (unsigned i = 0; i < 4u; i++) {
         CHECK_HEX(got[i], original[i]);
     }
+}
+
+TEST(a_failed_rollback_keeps_the_undo_log_for_the_next_boot)
+{
+    /*
+     * Added because a mutation went UNCAUGHT: reverting scos_txn_abort() to
+     * format the journal unconditionally broke nothing in the suite, which
+     * means the fix had no test behind it.
+     *
+     * The property: if the rollback itself cannot complete -- which happens for
+     * exactly one reason, power going -- the undo log must SURVIVE so the next
+     * boot can retry. Formatting it there discards the only record of what
+     * needs undoing, turning a transient failure into permanent inconsistency.
+     */
+    fresh();
+    const uint8_t original[4] = { 0x81u, 0x82u, 0x83u, 0x84u };
+    CHECK_EQ(
+        hal_nvm_write(HAL_NVM_EEPROM, SCOS_EE_SEC_BASE + 130u, original, 4u),
+        HAL_OK);
+
+    CHECK_EQ(scos_txn_begin(), SCOS_TXN_OK);
+    const uint8_t v[4] = { 0x91u, 0x92u, 0x93u, 0x94u };
+    CHECK_EQ(scos_nvm_write(HAL_NVM_EEPROM, SCOS_EE_SEC_BASE + 130u, v, 4u),
+             HAL_OK);
+
+    /* Make every further write fail, so the rollback cannot complete. */
+    vcard_fault_hold(true);
+    vcard_fault_at_write(0u, 0u);
+    CHECK(scos_txn_abort() != SCOS_TXN_OK);
+    vcard_fault_clear();
+
+    /*
+     * THE ASSERTION: the journal is still OPEN, so the log is still there.
+     *
+     * Note that this holds whether or not scos_txn_abort() tries to format --
+     * under a held fault the format's own write fails too. That is why a
+     * mutation removing the guard broke nothing, and why the guard's real
+     * subject is the CORRUPT case rather than this one. See the comment in
+     * scos_txn_abort() and the test below.
+     */
+    uint8_t hdr[10];
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, SCOS_EE_TXN_BASE, hdr, 10u), HAL_OK);
+    CHECK_HEX(hdr[3], 0xF0);                           /* TXN_STATE_OPEN */
+    CHECK(((uint16_t)((hdr[4] << 8) | hdr[5])) >= 1u); /* at least one entry */
+
+    /* And the new bytes are still in place, so recovery has real work to do. */
+    uint8_t mid[4];
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, SCOS_EE_SEC_BASE + 130u, mid, 4u),
+             HAL_OK);
+    CHECK_HEX(mid[0], 0x91);
+
+    /* Now recovery, with writes working again, must undo it. */
+    CHECK_EQ(scos_txn_recover(), SCOS_TXN_OK);
+    uint8_t got[4];
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, SCOS_EE_SEC_BASE + 130u, got, 4u),
+             HAL_OK);
+    for (unsigned i = 0; i < 4u; i++) {
+        CHECK_HEX(got[i], original[i]);
+    }
+}
+
+TEST(a_corrupt_entry_stream_is_discarded_rather_than_retried_for_ever)
+{
+    /*
+     * The other half of the abort decision, and the one that IS observable.
+     *
+     * A rollback can fail for two reasons. If the writes are failing, power is
+     * going and the log must survive for the next boot. But if the ENTRY STREAM
+     * is damaged while writes still work, retrying is futile -- and keeping the
+     * log would make every subsequent boot attempt the same failing rollback,
+     * so the card would come up in FS_ERROR answering 6581 for ever. A damaged
+     * card should be reported, not bricked as well.
+     */
+    fresh();
+    CHECK_EQ(scos_txn_begin(), SCOS_TXN_OK);
+    const uint8_t v[4] = { 0xA1u, 0xA2u, 0xA3u, 0xA4u };
+    CHECK_EQ(scos_nvm_write(HAL_NVM_EEPROM, SCOS_EE_SEC_BASE + 150u, v, 4u),
+             HAL_OK);
+
+    /*
+     * Corrupt the entry's LENGTH field to zero, which rollback() rejects: the
+     * header's count says an entry is there and the stream says it is empty, so
+     * the two disagree and a partial rollback would be worse than none. The
+     * header CRC still passes, so this is specifically a damaged entry area.
+     */
+    const uint8_t zero[2] = { 0x00u, 0x00u };
+    CHECK_EQ(
+        hal_nvm_write(HAL_NVM_EEPROM, SCOS_EE_TXN_BASE + 10u + 5u, zero, 2u),
+        HAL_OK);
+
+    CHECK_EQ(scos_txn_abort(), SCOS_TXN_ERR_CORRUPT);
+
+    /* Discarded, so the next boot does not retry it. */
+    uint8_t hdr[10];
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, SCOS_EE_TXN_BASE, hdr, 10u), HAL_OK);
+    CHECK_HEX(hdr[3], 0xFF); /* TXN_STATE_EMPTY */
+
+    /* And the card comes up rather than refusing for ever. */
+    CHECK_EQ(scos_txn_recover(), SCOS_TXN_OK);
+    CHECK_EQ(scos_init(&g_card), SCOS_OK);
 }
 
 TEST(a_committed_transaction_is_not_rolled_back)
@@ -564,10 +727,13 @@ int main(void)
     RUN(nesting_is_refused);
     RUN(a_write_too_large_for_the_journal_is_refused_not_performed);
     RUN(the_fault_hook_actually_cuts_a_write);
-    RUN(create_file_interrupted_at_every_byte_leaves_no_trace);
-    RUN(update_binary_interrupted_at_every_byte_leaves_the_old_data);
+    RUN(create_file_interrupted_at_any_write_leaves_no_trace);
+    RUN(update_binary_interrupted_at_any_write_leaves_the_old_data);
+    RUN(the_sweep_would_notice_if_recovery_stopped_working);
     RUN(a_corrupt_journal_header_is_discarded_not_replayed);
     RUN(a_half_written_state_byte_rolls_back);
+    RUN(a_failed_rollback_keeps_the_undo_log_for_the_next_boot);
+    RUN(a_corrupt_entry_stream_is_discarded_rather_than_retried_for_ever);
     RUN(a_committed_transaction_is_not_rolled_back);
     RUN(a_failed_verify_still_costs_a_try);
     RUN(a_failed_command_rolls_back_what_it_wrote);

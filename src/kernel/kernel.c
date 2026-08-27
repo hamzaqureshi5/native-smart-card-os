@@ -272,12 +272,39 @@ scos_status scos_process(scos_kernel *k, const uint8_t *cmd, uint16_t cmd_len,
     const bool    executed =
         (sw1 == 0x90u) || (sw1 == 0x61u) || (sw1 == 0x62u) || (sw1 == 0x63u);
 
+    uint16_t final = sw;
     if (executed) {
-        (void)scos_txn_commit();
+        /*
+         * A FAILED COMMIT MUST NOT REPORT SUCCESS.
+         *
+         * The first version discarded this result, and the two-dimensional
+         * interruption sweep caught it: a write cut during commit left the
+         * transaction OPEN -- so the next boot would roll the whole command
+         * back -- while the card answered 9000. The caller would believe a file
+         * had been created that vanished at the next power-on, which is the
+         * worst kind of failure this milestone can produce, because nothing
+         * anywhere records that it happened.
+         *
+         * 6581: the card failed, not the caller. The data is not lost -- it is
+         * exactly as durable as the journal says, and recovery will make the
+         * card consistent -- but the operation did not happen.
+         */
+        if (scos_txn_commit() != SCOS_TXN_OK) {
+            final = SW_MEMORY_FAILURE;
+        }
     } else {
-        (void)scos_txn_abort();
+        /*
+         * The handler already failed, so `sw` is diagnostic and kept. But if
+         * the rollback ALSO failed, the card's data is of unknown consistency
+         * and the caller should be told that rather than the original,
+         * narrower error -- and the journal deliberately stays open so the
+         * next boot retries.
+         */
+        if (scos_txn_abort() != SCOS_TXN_OK) {
+            final = SW_MEMORY_FAILURE;
+        }
     }
 
-    *rsp_len = apdu_rsp_finish(&r, sw);
+    *rsp_len = apdu_rsp_finish(&r, final);
     return SCOS_OK;
 }

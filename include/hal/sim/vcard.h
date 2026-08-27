@@ -87,6 +87,46 @@ void vcard_power_failure(void);
  * no way to ask whether it is being fault-injected, or a future version of it
  * could behave differently under test than in the field.
  */
+/*
+ * Arm a cut at a SPECIFIC write, not merely at a byte offset.
+ *
+ * `skip` writes complete normally, then the next one stores `after` bytes and
+ * reports HAL_ERR_POWER.
+ *
+ * The `skip` parameter is not a convenience. Without it every arming lands on
+ * the FIRST hal_nvm_write() a command performs -- which, since M4 wrapped every
+ * command in a transaction, is the journal's own header write. So
+ * scos_txn_begin() failed, the command aborted before touching any data, and a
+ * test asserting "the data is unchanged" passed without the data write ever
+ * having been attempted.
+ *
+ * That is exactly what happened here: the first version of the interruption
+ * tests swept byte offsets only, reported success at every one, and was
+ * measuring nothing. It was caught by disabling recovery entirely and finding
+ * the tests still passed.
+ *
+ * So a real sweep is two-dimensional: for each write in the command, for each
+ * byte offset within it.
+ */
+void vcard_fault_at_write(uint32_t skip, uint32_t after);
+
+/*
+ * Keep failing every write from the target onward, instead of just one.
+ *
+ * This is what makes BOOT recovery reachable from a full-stack test. A
+ * single-shot fault is always followed, in the same session, by
+ * scos_txn_abort() rolling the transaction back -- because the simulator cannot
+ * stop the process half way through a C function the way a real card stops when
+ * the field drops. So a single-shot fault exercises the in-session rollback
+ * path and never leaves a journal OPEN for the next boot to find.
+ *
+ * With hold set, the abort's own writes fail too, the journal stays OPEN, and
+ * the next power-on is the thing that has to put the card right. That is the
+ * path a real tear takes and the one that was untested.
+ */
+void vcard_fault_hold(bool hold);
+
+/* Shorthand for vcard_fault_at_write(0, n) -- cut the very next write. */
 void vcard_fault_after_bytes(uint32_t n);
 void vcard_fault_clear(void);
 

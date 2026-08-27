@@ -36,6 +36,7 @@
 #include "hal/sim/vcard.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /*
@@ -127,7 +128,13 @@ static void print_help(void)
                   "Control lines:\n"
                   "  .atr     print the Answer To Reset\n"
                   "  .reset   warm reset (clears volatile state, keeps NVM)\n"
-                  "  .quit    power down and exit\n"
+                  "  .quit    power down and exit (flushes NVM durably)\n"
+                  "  .tear    power FAILURE: exit WITHOUT flushing NVM\n"
+                  "  .fault N       cut the next NVM write after N bytes\n"
+                  "  .fault SKIP N  let SKIP writes through, then cut\n"
+                  "  .hold          keep failing writes after the cut\n"
+                  "  .fault   disarm\n"
+                  "  .fired   FIRED / NOTFIRED -- did the armed fault go off?\n"
                   "  .help    this text\n"
                   "  #...     comment\n");
     (void)fflush(stderr);
@@ -170,6 +177,117 @@ static int handle_control(const char *line)
     if (strcmp(line, ".help") == 0) {
         print_help();
         return 1;
+    }
+    /*
+     * .fault N -- arm the next hal_nvm_write() to store N bytes and then report
+     * power loss.
+     *
+     * Exposed on the transport, and only on the SIMULATOR transport, because
+     * without it a power-failure test can only run inside one process. The C
+     * unit tests can call vcard_fault_after_bytes() directly, but they cannot
+     * demonstrate the case that actually matters to a card: an interrupted
+     * write that is still interrupted after the reader takes the card away and
+     * puts it back. That needs two sessions over a state directory, which means
+     * the test client needs a way to say it.
+     *
+     * NOT reachable by the OS. The OS sees hal_nvm_write() returning
+     * HAL_ERR_POWER and nothing else; there is no query for "am I being
+     * fault-injected", deliberately, or a future version could behave
+     * differently under test than in the field.
+     */
+    if (strncmp(line, ".fault", 6u) == 0) {
+        const char *arg = line + 6u;
+        while (*arg == ' ' || *arg == '\t') {
+            arg++;
+        }
+        if (*arg == '\0') {
+            vcard_fault_clear();
+            (void)fprintf(stderr, "fault: disarmed\n");
+            (void)fflush(stderr);
+            return 1;
+        }
+        /* strtoul over a trimmed line; a trailing non-digit is a typo worth
+         * reporting rather than silently truncating, because "arm at 100" and
+         * "arm at 1" are very different tests. */
+        /*
+         * ".fault N" cuts the next write after N bytes.
+         * ".fault SKIP N" lets SKIP writes through first, then cuts.
+         *
+         * The two-argument form is the one that matters. Every command now
+         * begins by writing the journal header, so a one-argument arming always
+         * lands there and the command aborts before touching any data -- which
+         * made the first version of the tear tests pass without exercising
+         * anything.
+         */
+        char         *end = NULL;
+        unsigned long a1  = strtoul(arg, &end, 10);
+        if (end == arg) {
+            (void)fprintf(stderr, "fault: '%s' is not a number\n", arg);
+            (void)fflush(stderr);
+            return 1;
+        }
+        while (end != NULL && (*end == ' ' || *end == '\t')) {
+            end++;
+        }
+        unsigned long skip = 0u;
+        unsigned long n    = a1;
+        if (end != NULL && *end != '\0') {
+            const char   *second = end;
+            char         *e2     = NULL;
+            unsigned long a2     = strtoul(second, &e2, 10);
+            if (e2 == second || (e2 != NULL && *e2 != '\0')) {
+                (void)fprintf(stderr, "fault: '%s' is not a byte count\n",
+                              second);
+                (void)fflush(stderr);
+                return 1;
+            }
+            skip = a1;
+            n    = a2;
+        }
+        vcard_fault_at_write((uint32_t)skip, (uint32_t)n);
+        (void)fprintf(stderr, "fault: NVM write #%lu stops after %lu byte(s)\n",
+                      skip + 1u, n);
+        (void)fflush(stderr);
+        return 1;
+    }
+    /*
+     * .fired -- did the armed fault actually go off?
+     *
+     * A test that asks for an interruption and gets none must FAIL rather than
+     * pass quietly: a suite full of armings that never fired would report
+     * tear resistance it never exercised. Answered on stdout, because the test
+     * client reads stdout as the response stream.
+     */
+    /*
+     * .hold -- keep failing every NVM write once the fault fires, rather than
+     * just the one. What leaves a journal OPEN for the next boot to recover;
+     * see vcard_fault_hold().
+     */
+    if (strcmp(line, ".hold") == 0) {
+        vcard_fault_hold(true);
+        (void)fprintf(stderr,
+                      "fault: will hold (every write fails once cut)\n");
+        (void)fflush(stderr);
+        return 1;
+    }
+    if (strcmp(line, ".fired") == 0) {
+        (void)printf("%s\n", vcard_fault_fired() ? "FIRED" : "NOTFIRED");
+        (void)fflush(stdout);
+        return 1;
+    }
+    /*
+     * .tear -- power failure, as distinct from .quit.
+     *
+     * .quit powers the card down cleanly and flushes NVM durably, which models
+     * an orderly end of session and cannot lose anything. .tear skips the
+     * flush, so the session's unwritten state is gone -- which is the whole
+     * point.
+     */
+    if (strcmp(line, ".tear") == 0) {
+        vcard_power_failure();
+        (void)fprintf(stderr, "tear: power removed WITHOUT flushing\n");
+        (void)fflush(stderr);
+        return -1;
     }
     (void)fprintf(stderr, "unknown control '%s' (try .help)\n", line);
     (void)fflush(stderr);
