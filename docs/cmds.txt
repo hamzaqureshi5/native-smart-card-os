@@ -111,7 +111,7 @@ cmake --build build-an -j
 
 # Prove the OS has no hidden simulator dependency: link it against the
 # do-nothing Samsung stub. All core tests still pass.
-cmake -S . -B build-sam -DSCOS_HAL=samsung -DSCOS_ACK_SAMSUNG_STUB=ON -DSCOS_SANITIZE=OFF
+cmake -S . -B build-sam -DSCOS_HAL=s3m228a -DSCOS_ACK_S3M228A_STUB=ON -DSCOS_SANITIZE=OFF
 cmake --build build-sam -j && ctest --test-dir build-sam
 
 # A smaller chip
@@ -131,3 +131,49 @@ printf '00A40000022F00\n00B0000006\n.quit\n' | timeout 30 qemu-system-arm \
   -kernel ~/operating-system/smartcard-os/build-arm/smartcard-os.elf
 
 x86 writes CAFEBE; ARM Cortex-M3 mounts the same image and reads it back. Same filesystem, two instruction sets.
+
+
+
+
+
+
+tw give me command like { cat recycle.ldr; echo .quit; } | ./tools/run-scv1.sh --state-dir mycard --boot --bootsel to load os, recyle os,
+
+Here are the commands, in both the by-hand and the helper form.
+
+By hand (the form you asked for)
+
+# 1. generate the two .ldr files (only needed after a rebuild)
+./tools/mkldr.py os build-arm/smartcard-os.bin -o os.ldr
+./tools/mkldr.py recycle -o recycle.ldr
+
+# 2. LOAD the OS
+{ cat os.ldr; echo .quit; } | ./tools/run-scv1.sh --state-dir mycard --boot --bootsel
+
+# 3. RECYCLE (erase the OS slot back to blank)
+{ cat recycle.ldr; echo .quit; } | ./tools/run-scv1.sh --state-dir mycard --boot --bootsel
+
+# 4. run the loaded OS (no --bootsel, so the boot ROM starts it)
+{ echo .atr; echo .quit; } | ./tools/run-scv1.sh --state-dir mycard --boot
+
+Three flags, three different jobs:
+
+┌────────────────────┬───────────────────────────────────────────────────────────────────────────────┐
+│        Flag        │                                    Meaning                                    │
+├────────────────────┼───────────────────────────────────────────────────────────────────────────────┤
+│ --boot             │ boot the boot ROM (scv1-boot.elf) instead of the OS                           │
+├────────────────────┼───────────────────────────────────────────────────────────────────────────────┤
+│ --bootsel          │ hold the strap so the boot ROM stays in the loader even if the slot is ACTIVE │
+├────────────────────┼───────────────────────────────────────────────────────────────────────────────┤
+│ --state-dir mycard │ where the chip's flash/EEPROM images live                                     │
+└────────────────────┴───────────────────────────────────────────────────────────────────────────────┘
+
+--bootsel is required for steps 2 and 3. Without it, a card whose slot is already ACTIVE boots straight into the OS, and your CLA 80 loader APDUs reach the OS, which answers 6E00 to every line — that's the wall of 6E00 you hit earlier. On a genuinely blank card you can omit it, but including it always is harmless and saves the confusion.
+
+.quit is required on every one of these. A UART has no end-of-file, so when your input runs out the card is still powered and waiting — exactly as a real card would be — and QEMU sits there forever.
+
+The helper (does the same thing, checks the answers)
+
+./tools/load-os.sh mycard              # load build-arm/smartcard-os.bin
+./tools/load-os.sh mycard other.bin    # load a specific image
+./tools/load-os.sh --recycle mycard    # erase the slot
