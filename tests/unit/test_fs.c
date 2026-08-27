@@ -249,9 +249,55 @@ TEST(factory_layout_is_as_documented)
         CHECK_EQ(d.size, expect[i].size);
         CHECK_EQ(d.lifecycle, FS_LC_ACTIVATED);
     }
-    CHECK_EQ(fs_child_count(0u), 2); /* 2F00 and 7F10 */
+    CHECK_EQ(fs_child_count(0u), 3); /* 2F00, 7F10 and EF.ATR 2F01 */
     CHECK_EQ(fs_child_count(2u), 2); /* 6F01 and 6F02 */
     CHECK_EQ(fs_child_count(3u), 0); /* an EF has no children */
+}
+
+TEST(ef_atr_says_what_the_card_can_do)
+{
+    fresh();
+
+    /*
+     * EF.ATR is the one file whose contents are a CLAIM about the card, so the
+     * test asserts the bytes rather than just that the file exists. A wrong
+     * byte here does not break the card -- it makes the card lie to every
+     * reader that asks, which is worse and much harder to notice.
+     */
+    fs_selection sel;
+    fs_selection_reset(&sel);
+    CHECK_EQ(fs_select_by_fid(&sel, FS_EF_ATR_FID), FS_OK);
+
+    fs_descriptor d;
+    CHECK_EQ(fs_get(sel.cur_ef, &d), FS_OK);
+    CHECK_EQ(d.size, FS_EF_ATR_SIZE);
+    CHECK_EQ(d.parent, 0u); /* directly under the MF, as ISO reserves */
+    /* No SFI: 1..30 is a scarce range and 2F01 is already well known. */
+    CHECK_EQ(d.sfi, FS_NO_SFI);
+
+    uint8_t  buf[FS_EF_ATR_SIZE];
+    uint16_t got = 0u;
+    CHECK_EQ(fs_ef_read(sel.cur_ef, 0u, FS_EF_ATR_SIZE, buf, &got), FS_OK);
+    CHECK_EQ(got, FS_EF_ATR_SIZE);
+
+    CHECK_HEX(buf[0], 0x47); /* card capabilities data object     */
+    CHECK_HEX(buf[1], 0x03); /* three bytes of value              */
+    CHECK_HEX(buf[2], 0x00); /* DF selection methods: not claimed */
+    CHECK_HEX(buf[3], 0x00); /* data coding byte:     not claimed */
+
+    /* Extended Lc/Le supported... */
+    CHECK((buf[4] & FS_CARD_CAP_EXTENDED_LENGTH) != 0u);
+    /* ...and NOTHING else. In particular the command-chaining bit must stay
+     * clear, because apdu_check_cla() refuses chaining with 6884 and a card
+     * that advertises a command it rejects is worse than one that advertises
+     * nothing. */
+    CHECK_HEX(buf[4], FS_CARD_CAP_EXTENDED_LENGTH);
+
+    /* The file is exactly as long as its content. Trailing 0xFF would read to
+     * a BER-TLV parser as the start of a malformed object rather than as
+     * end-of-data. */
+    CHECK_EQ(fs_ef_read(sel.cur_ef, 0u, 64u, buf, &got), FS_OK);
+    CHECK_EQ(got, FS_EF_ATR_SIZE);
 }
 
 TEST(sfi_is_scoped_to_its_parent_df)
@@ -378,7 +424,7 @@ TEST(failed_path_walk_is_atomic)
     CHECK_EQ(sel.cur_ef, before.cur_ef);
 }
 
-TEST(deactivated_file_is_not_selectable)
+TEST(deactivated_file_is_selectable_but_not_readable)
 {
     fresh();
 
@@ -390,16 +436,149 @@ TEST(deactivated_file_is_not_selectable)
 
     fs_selection sel;
     fs_selection_reset(&sel);
-    /* NOT_USABLE, distinct from NOT_FOUND: the file exists, it is just not
+
+    /*
+     * SELECTION SUCCEEDS, and this assertion is the reverse of what it used to
+     * be. The old rule refused it, which made deactivation a ONE-WAY DOOR:
+     * ACTIVATE FILE addresses the currently selected file, so a file that
+     * could not be selected could never be reactivated by any APDU. The test
+     * that pinned the old behaviour even carried a comment claiming the state
+     * was reversible -- it was reversible only from inside the OS.
+     *
+     * Selection is navigation and inspection. It grants nothing.
+     */
+    CHECK_EQ(fs_select_by_fid(&sel, 0x2F00u), FS_OK);
+    CHECK_EQ(sel.cur_ef, 1u);
+
+    /* DATA ACCESS is refused, which is the property that was always the point.
+     * NOT_USABLE, distinct from NOT_FOUND: the file exists, it is just not
      * available. Merging them would hide the difference from an administrator
      * trying to work out why a card stopped working. */
-    CHECK_EQ(fs_select_by_fid(&sel, 0x2F00u), FS_ERR_NOT_USABLE);
+    uint8_t  buf[8];
+    uint16_t got = 0u;
+    CHECK_EQ(fs_ef_read(1u, 0u, 4u, buf, &got), FS_ERR_NOT_USABLE);
+    CHECK_EQ(got, 0);
+    const uint8_t src[4] = { 1u, 2u, 3u, 4u };
+    CHECK_EQ(fs_ef_write(1u, 0u, 4u, src), FS_ERR_NOT_USABLE);
 
     /* Reactivate and it works again -- deactivation is reversible; only
      * TERMINATED is not. */
     d.lifecycle = FS_LC_ACTIVATED;
     CHECK_EQ(fs_store_write_desc(1u, &d), FS_OK);
     CHECK_EQ(fs_select_by_fid(&sel, 0x2F00u), FS_OK);
+    CHECK_EQ(fs_ef_read(1u, 0u, 4u, buf, &got), FS_OK);
+    CHECK_EQ(got, 4);
+}
+
+TEST(terminated_file_is_not_selectable)
+{
+    fresh();
+
+    /* TERMINATED stays unselectable, and the reason is different from
+     * DEACTIVATED's: termination is irreversible by design, so there is no
+     * administrative action left that needs to name the file. Keeping it
+     * refused is also what preserves the 6A82 / 6985 distinction as
+     * meaningful. */
+    fs_descriptor d;
+    CHECK_EQ(fs_get(1u, &d), FS_OK);
+    d.lifecycle = FS_LC_TERMINATED;
+    CHECK_EQ(fs_store_write_desc(1u, &d), FS_OK);
+
+    fs_selection sel;
+    fs_selection_reset(&sel);
+    CHECK_EQ(fs_select_by_fid(&sel, 0x2F00u), FS_ERR_NOT_USABLE);
+}
+
+TEST(a_deactivated_df_blocks_the_files_inside_it)
+{
+    fresh();
+
+    /*
+     * The property that makes DEACTIVATE FILE on a directory mean anything.
+     *
+     * Before ancestors_usable() existed, fs_ef_read() checked only the EF's
+     * own lifecycle -- so deactivating a DF refused operations on the DF while
+     * every EF inside it stayed perfectly readable. An administrator who
+     * deactivated a directory to take an application out of service would
+     * have taken nothing out of service, and the card would have reported
+     * success for the command that did nothing.
+     */
+    fs_selection sel;
+    fs_selection_reset(&sel);
+
+    /* Build MF/7F01/6F01 and put a byte in the EF. */
+    fs_descriptor df = { 0 };
+    df.file_id       = 0x7F01u;
+    df.type          = FS_TYPE_DF;
+    df.lifecycle     = FS_LC_ACTIVATED;
+    uint16_t df_idx  = FS_INVALID_INDEX;
+    CHECK_EQ(fs_create_file(&sel, &df, &df_idx), FS_OK);
+
+    CHECK_EQ(fs_select_child_df(&sel, 0x7F01u), FS_OK);
+    fs_descriptor ef = { 0 };
+    ef.file_id       = 0x6F01u;
+    ef.type          = FS_TYPE_EF_TRANSPARENT;
+    ef.lifecycle     = FS_LC_ACTIVATED;
+    ef.size          = 8u;
+    ef.sfi           = FS_NO_SFI;
+    uint16_t ef_idx  = FS_INVALID_INDEX;
+    CHECK_EQ(fs_create_file(&sel, &ef, &ef_idx), FS_OK);
+
+    const uint8_t src[4] = { 0xDEu, 0xADu, 0xBEu, 0xEFu };
+    CHECK_EQ(fs_ef_write(ef_idx, 0u, 4u, src), FS_OK);
+
+    uint8_t  buf[8];
+    uint16_t got = 0u;
+    CHECK_EQ(fs_ef_read(ef_idx, 0u, 4u, buf, &got), FS_OK);
+    CHECK_EQ(got, 4);
+
+    /* Now deactivate the PARENT. The EF itself is untouched and still
+     * ACTIVATED, so only the ancestor walk can catch this. */
+    CHECK_EQ(fs_set_lifecycle(df_idx, FS_LC_DEACTIVATED), FS_OK);
+
+    fs_descriptor check;
+    CHECK_EQ(fs_get(ef_idx, &check), FS_OK);
+    CHECK_EQ(check.lifecycle, FS_LC_ACTIVATED); /* the EF really is active */
+
+    CHECK_EQ(fs_ef_read(ef_idx, 0u, 4u, buf, &got), FS_ERR_NOT_USABLE);
+    CHECK_EQ(fs_ef_write(ef_idx, 0u, 4u, src), FS_ERR_NOT_USABLE);
+
+    /* Reactivating the DF restores access to the whole subtree. */
+    CHECK_EQ(fs_set_lifecycle(df_idx, FS_LC_ACTIVATED), FS_OK);
+    CHECK_EQ(fs_ef_read(ef_idx, 0u, 4u, buf, &got), FS_OK);
+    CHECK_EQ(got, 4);
+    CHECK_EQ(buf[0], 0xDE);
+}
+
+TEST(set_lifecycle_refuses_what_it_must)
+{
+    fresh();
+
+    /* Only ACTIVATED and DEACTIVATED are reachable. */
+    CHECK_EQ(fs_set_lifecycle(1u, FS_LC_TERMINATED), FS_ERR_PARAM);
+    CHECK_EQ(fs_set_lifecycle(1u, FS_LC_CREATION), FS_ERR_PARAM);
+    CHECK_EQ(fs_set_lifecycle(1u, FS_LC_INITIALISED), FS_ERR_PARAM);
+
+    /* Idempotent: repeating a state change must succeed, because a reader
+     * whose response was lost has no recourse but to send it again. */
+    CHECK_EQ(fs_set_lifecycle(1u, FS_LC_ACTIVATED), FS_OK);
+    CHECK_EQ(fs_set_lifecycle(1u, FS_LC_DEACTIVATED), FS_OK);
+    CHECK_EQ(fs_set_lifecycle(1u, FS_LC_DEACTIVATED), FS_OK);
+    CHECK_EQ(fs_set_lifecycle(1u, FS_LC_ACTIVATED), FS_OK);
+
+    /* Out of TERMINATED: never. */
+    fs_descriptor d;
+    CHECK_EQ(fs_get(1u, &d), FS_OK);
+    d.lifecycle = FS_LC_TERMINATED;
+    CHECK_EQ(fs_store_write_desc(1u, &d), FS_OK);
+    CHECK_EQ(fs_set_lifecycle(1u, FS_LC_ACTIVATED), FS_ERR_NOT_USABLE);
+    CHECK_EQ(fs_set_lifecycle(1u, FS_LC_DEACTIVATED), FS_ERR_NOT_USABLE);
+
+    /* The MF can never be deactivated: it is the only entry point to the tree,
+     * so turning it off is bricking the card, not administering it. */
+    const uint16_t root = fs_root_index();
+    CHECK_EQ(fs_set_lifecycle(root, FS_LC_DEACTIVATED), FS_ERR_NOT_USABLE);
+    CHECK_EQ(fs_set_lifecycle(root, FS_LC_ACTIVATED), FS_OK); /* already so */
 }
 
 /* ============================================================== EF data === */
@@ -771,13 +950,17 @@ int main(void)
     RUN(allocation_is_bounded_and_monotonic);
 
     RUN(factory_layout_is_as_documented);
+    RUN(ef_atr_says_what_the_card_can_do);
     RUN(sfi_is_scoped_to_its_parent_df);
     RUN(selecting_a_df_clears_the_current_ef);
     RUN(selection_search_order_is_scoped);
     RUN(select_parent_and_typed_children);
     RUN(select_by_path);
     RUN(failed_path_walk_is_atomic);
-    RUN(deactivated_file_is_not_selectable);
+    RUN(deactivated_file_is_selectable_but_not_readable);
+    RUN(terminated_file_is_not_selectable);
+    RUN(a_deactivated_df_blocks_the_files_inside_it);
+    RUN(set_lifecycle_refuses_what_it_must);
 
     RUN(ef_read_write_within_bounds);
     RUN(ef_access_cannot_escape_the_file);

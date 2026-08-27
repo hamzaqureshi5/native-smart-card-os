@@ -131,6 +131,7 @@ add_library(scos_core STATIC
   src/filesystem/cmd_select.c
   src/filesystem/cmd_binary.c
   src/filesystem/cmd_create.c
+  src/filesystem/cmd_lifecycle.c
 )
 target_include_directories(scos_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"

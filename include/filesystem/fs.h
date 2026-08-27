@@ -119,6 +119,35 @@ fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
  */
 fs_status fs_delete_file(fs_selection *sel, uint16_t file_id);
 
+/* ------------------------------------------------------------- life cycle -- */
+/*
+ * Move a file between ACTIVATED and DEACTIVATED (ISO/IEC 7816-9 ACTIVATE FILE
+ * and DEACTIVATE FILE).
+ *
+ * ONLY those two states, and only between each other. The transitions this
+ * REFUSES are the interesting part:
+ *
+ *   - anything out of TERMINATED. Termination is irreversible by design; a
+ *     card that could un-terminate a file would make the state worthless as a
+ *     control, and TERMINATED is what a future TERMINATE CARD relies on.
+ *   - deactivating the MF. The MF is the only entry point to the tree, so
+ *     turning it off is not an administrative action, it is bricking the card
+ *     with no way back. Taking a whole card out of service is what TERMINATE
+ *     CARD is for, and it is deliberately a different command.
+ *   - CREATION and INITIALISED as either endpoint. A file mid-personalisation
+ *     is not something the rest of the OS is built to handle, and quietly
+ *     dragging it into ACTIVATED would hide an incomplete personalisation.
+ *
+ * Setting the state a file is already in SUCCEEDS. That is not laxity: if the
+ * response to a DEACTIVATE is lost on the link, the reader's only recourse is
+ * to send it again, and failing the retry would leave a correct reader unable
+ * to finish a correct sequence.
+ *
+ * NO ACCESS CONTROL, exactly as for create and delete above. Anyone holding
+ * the reader can deactivate any file. Tracked against M3.
+ */
+fs_status fs_set_lifecycle(uint16_t index, fs_lifecycle want);
+
 /* --------------------------------------------------------------- selection -- */
 
 /*

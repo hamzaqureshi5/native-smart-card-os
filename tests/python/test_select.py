@@ -95,7 +95,8 @@ class TestSelectMasterFile(CardTestCase):
 
 class TestSelectErrors(CardTestCase):
     def test_unknown_file(self):
-        self.assertSW(self.card.select(0x2F01), SW_FILE_NOT_FOUND)
+        # 2F02, not 2F01: 2F01 is EF.ATR and the card really has it now.
+        self.assertSW(self.card.select(0x2F02), SW_FILE_NOT_FOUND)
 
     def test_select_by_df_name_not_supported(self):
         # P1=04 selects by AID. AIDs belong to the Card Manager (M7), so there

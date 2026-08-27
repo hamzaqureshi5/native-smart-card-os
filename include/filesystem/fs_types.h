@@ -46,7 +46,29 @@
 #define FS_FID_MF        0x3F00u
 #define FS_INVALID_INDEX 0xFFFFu
 #define FS_NO_PARENT     0xFFFFu
-#define FS_NO_SFI        0x00u
+
+/* ---------------------------------------------------------------- EF.ATR -- */
+/*
+ * ISO/IEC 7816-4 reserves file identifier 2F01 directly under the MF for card
+ * capability information that does not fit in the ATR's historical bytes.
+ *
+ * Five bytes: the card-capabilities data object, tag 47, with a three-byte
+ * value. Sized exactly, not rounded up: an EF.ATR longer than its content
+ * reads as trailing 0xFF, which a BER-TLV parser sees as the start of a
+ * malformed object rather than as end-of-data.
+ */
+#define FS_EF_ATR_FID  0x2F01u
+#define FS_EF_ATR_SIZE 5u
+
+/*
+ * Byte 3 of the card-capabilities data object, ISO/IEC 7816-4.
+ *
+ * Only the bit this card can honestly claim is defined here. Command chaining
+ * is NOT set, because apdu_check_cla() refuses the chaining bit with 6884, and
+ * advertising a command the card rejects is worse than advertising nothing.
+ */
+#define FS_CARD_CAP_EXTENDED_LENGTH 0x40u
+#define FS_NO_SFI                   0x00u
 
 /* ------------------------------------------------------------ file types -- */
 /*

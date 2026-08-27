@@ -12,12 +12,20 @@ to list a directory.
 ```
 MF 3F00                    Master File -- the root. Exactly one.
  +-- EF 2F00               Elementary File: actual data. 32 bytes, SFI 1
+ +-- EF 2F01               EF.ATR: what the card can do. 5 bytes, no SFI
  +-- DF 7F10               Dedicated File: a container ("an application")
       +-- EF 6F01          64 bytes, SFI 1
       +-- EF 6F02          16 bytes, SFI 2
 ```
 
 That is the factory layout this card ships with, from `fs_personalise()`.
+
+`2F01` is the only one of those whose *contents* mean something to a reader:
+ISO/IEC 7816-4 reserves that identifier under the MF for card capability
+information that does not fit in the ATR. Every other file here ships in the
+erased state (`0xFF`), which is what a real un-personalised EF reads as. See
+the EF.ATR entry in [roadmap.md](roadmap.md) for what it asserts and, more
+importantly, what it deliberately does not.
 
 The difference from a PC filesystem that matters most: **access control is per
 file and enforced by the card itself.** There is no privileged mode that

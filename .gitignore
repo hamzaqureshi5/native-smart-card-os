@@ -27,3 +27,7 @@ build-logs/
 build.log
 build-arm.log
 build-rel.log
+
+# Cards created by tools/card
+cards/
+build-arm.card.log

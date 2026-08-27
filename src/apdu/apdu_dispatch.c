@@ -16,7 +16,9 @@ static const scos_cmd_entry k_commands[] = {
     { INS_UPDATE_BINARY, "UPDATE BINARY", scos_cmd_update_binary },
     { INS_CREATE_FILE, "CREATE FILE", scos_cmd_create_file },
     { INS_DELETE_FILE, "DELETE FILE", scos_cmd_delete_file },
-    /* M3 adds VERIFY; M2b still owes ACTIVATE / DEACTIVATE FILE. */
+    { INS_ACTIVATE_FILE, "ACTIVATE FILE", scos_cmd_activate_file },
+    { INS_DEACTIVATE_FILE, "DEACTIVATE FILE", scos_cmd_deactivate_file },
+    /* M3 adds VERIFY. */
 };
 
 uint16_t scos_dispatch(scos_kernel *k, const apdu_command *cmd,
@@ -54,6 +56,10 @@ const char *scos_ins_name(uint8_t ins)
         return "CREATE FILE";
     case INS_DELETE_FILE:
         return "DELETE FILE";
+    case INS_ACTIVATE_FILE:
+        return "ACTIVATE FILE";
+    case INS_DEACTIVATE_FILE:
+        return "DEACTIVATE FILE";
     default:
         return "UNKNOWN";
     }

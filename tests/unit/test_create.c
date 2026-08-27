@@ -334,7 +334,9 @@ TEST(the_descriptor_table_has_a_hard_limit)
         CHECK_HEX(sw, SW_NOT_ENOUGH_SPACE);
         break;
     }
-    CHECK_EQ(created, FS_MAX_FILES - 5u);
+    /* Slots taken by the factory layout: MF, 2F00, 7F10, 6F01, 6F02, EF.ATR
+     * = 6, plus the one DF this test makes to hold the children. */
+    CHECK_EQ(created, FS_MAX_FILES - 6u);
 
     /* The card still works afterwards -- running out of slots must not be a
      * one-way trip into a broken state. */
@@ -579,7 +581,7 @@ TEST(malformed_templates_are_refused)
 
     /* None of that created anything. */
     CHECK_EQ(fs_child_count(fs_root_index()),
-             2); /* factory: EF 2F00, DF 7F10 */
+             3); /* factory: EF 2F00, DF 7F10, EF.ATR 2F01 */
 }
 
 TEST(unknown_tags_are_refused_not_ignored)
@@ -671,12 +673,25 @@ TEST(lifecycle_can_be_requested_and_is_honoured)
     fresh();
     CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
 
-    /* Created DEACTIVATED (04): the file exists but is not usable, which must
-     * be visible as 6985 rather than 6A82. */
+    /*
+     * Created DEACTIVATED (04). The file exists and can be SELECTED -- which
+     * is what makes ACTIVATE FILE able to reach it -- but cannot be read.
+     *
+     * Selection used to be refused here with 6985. That made a file created
+     * deactivated permanently dead: nothing could name it, so nothing could
+     * activate it. Selection is now navigation and grants nothing; the gate is
+     * on data access. See resolve_selectable() in src/filesystem/fs.c.
+     */
     const uint8_t deact[] = { 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x1B,
                               0x80, 0x02, 0x00, 0x10, 0x8A, 0x01, 0x04 };
     CHECK_HEX(send_create_fcp(deact, (uint8_t)sizeof(deact)), SW_OK);
-    CHECK_HEX(select_fid(0x02u, 0x281Bu), SW_CONDITIONS_NOT_SATISFIED);
+    CHECK_HEX(select_fid(0x02u, 0x281Bu), SW_OK);
+
+    /* ...and reading it is still refused, which is the property that matters.
+     * 6985 "conditions not satisfied", not 6A82: the file is there. */
+    const uint8_t read4[] = { 0x00u, 0xB0u, 0x00u, 0x00u, 0x04u };
+    CHECK_HEX(send(read4, (uint16_t)sizeof(read4), NULL, NULL),
+              SW_CONDITIONS_NOT_SATISFIED);
 
     /* TERMINATED (0C) is irreversible, so creating something already dead is
      * refused rather than honoured. */

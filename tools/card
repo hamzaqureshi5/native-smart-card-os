@@ -1,0 +1,482 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# card -- one command for the whole card lifecycle.
+#
+# The pieces already existed -- mkldr.py, load-os.sh, run-scv1.sh -- but each
+# had its own argument shape, and using a card meant remembering which tool
+# took --state-dir, which took a positional, which needed --boot, and that
+# piping APDUs into a UART hangs unless the input ends with `.quit`. That is
+# four things to remember to do one thing.
+#
+# This is a FACADE over those tools, not a replacement: no loader logic lives
+# here. The complexity was in the surface, not the substance.
+#
+#   tools/card new      [NAME]          a blank chip, nothing programmed
+#   tools/card load     [NAME]          load the OS onto it (builds if needed)
+#   tools/card status   [NAME]          what is in the OS slot
+#   tools/card shell    [NAME]          interactive APDU prompt
+#   tools/card apdu     [NAME] HEX...   send APDUs, print a card trace
+#   tools/card recycle  [NAME]          blank the OS slot (OS gone, files kept)
+#   tools/card wipe     [NAME]          erase the data NVM (files re-created)
+#   tools/card list                     cards you have
+#   tools/card rm       NAME            delete one
+#
+# NAME defaults to "default", so the common path is:
+#
+#   tools/card load        # blank chip -> running OS
+#   tools/card shell       # talk to it
+#   tools/card recycle     # back to blank
+#
+# Cards live in cards/<name>/ and are gitignored. Each is a directory of
+# binary images standing in for the chip's non-volatile memory, so a card
+# survives between invocations exactly as real silicon would.
+
+set -u -o pipefail
+cd "$(dirname "$0")/.."
+ROOT=$(pwd)
+
+CARDS="$ROOT/cards"
+BOOTROM="$ROOT/build-arm/scv1-boot.elf"
+OSIMAGE="$ROOT/build-arm/smartcard-os.bin"
+
+die() { echo "card: $*" >&2; exit 1; }
+
+# --- the build, on demand ---------------------------------------------------
+#
+# Every other tool here failed with "boot ROM not found, run these two cmake
+# commands". Printing instructions the user must retype is not help; it is a
+# to-do list. Build it.
+ensure_build()
+{
+    command -v arm-none-eabi-gcc >/dev/null \
+        || die "needs arm-none-eabi-gcc (apt install gcc-arm-none-eabi)"
+
+    if [ ! -d "$ROOT/build-arm" ]; then
+        echo "card: configuring the ARM build (first run)..."
+        cmake -S "$ROOT" -B "$ROOT/build-arm" \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-arm-scv1.cmake \
+            -DSCOS_HAL=arm-scv1 -DCMAKE_BUILD_TYPE=Debug >/dev/null 2>&1 \
+            || die "cmake configure failed; run tools/build.sh arm to see why"
+    fi
+
+    #
+    # ALWAYS build, not just when the image is missing.
+    #
+    # The first version of this returned early if build-arm/smartcard-os.bin
+    # existed, which meant that after editing src/ the next `card load` loaded
+    # the PREVIOUS OS -- silently, successfully, and with a reassuring "ok, 143
+    # responses, none refused". You would then debug a change that was never on
+    # the card. That is the worst kind of convenience.
+    #
+    # cmake --build is incremental: a no-op costs a fraction of a second, so
+    # there is nothing to save by guessing.
+    #
+    local before=""
+    [ -f "$OSIMAGE" ] && before=$(sha256sum "$OSIMAGE" | cut -c1-12)
+
+    cmake --build "$ROOT/build-arm" -j"$( (nproc 2>/dev/null || echo 4) )" \
+        > "$ROOT/build-arm.card.log" 2>&1 \
+        || { tail -20 "$ROOT/build-arm.card.log"
+             die "build failed -- see build-arm.card.log"; }
+
+    [ -f "$BOOTROM" ] || die "built, but $BOOTROM is missing"
+    [ -f "$OSIMAGE" ] || die "built, but $OSIMAGE is missing"
+
+    local after; after=$(sha256sum "$OSIMAGE" | cut -c1-12)
+    if [ -n "$before" ] && [ "$before" != "$after" ]; then
+        echo "card: OS image changed ($before -> $after) -- rebuilt from src/"
+    fi
+}
+
+# Is the image on the card the one currently built? Answers the question a
+# developer actually has after editing src/: "am I testing my change?"
+card_is_current()
+{
+    local d=$1
+    [ -f "$d/card_osflash.bin" ] && [ -f "$OSIMAGE" ] || return 1
+    local n; n=$(stat -c %s "$OSIMAGE" 2>/dev/null) || return 1
+    # The OS slot holds the image at offset 0, padded with 0xFF. Compare only
+    # the image's own length.
+    cmp -s -n "$n" "$OSIMAGE" "$d/card_osflash.bin"
+}
+
+dir_for() { echo "$CARDS/${1:-default}"; }
+
+#
+# Record anything that changes the OS slot.
+#
+# While building this I lost a loaded card and could not tell what had erased
+# it -- my own `card recycle` from a few commands earlier was the likeliest
+# answer, but "likeliest" is a bad place to leave it when the alternative is a
+# boot-ROM bug. Two lines of logging make the question answerable instead of
+# arguable.
+#
+note()
+{
+    local d=$1; shift
+    mkdir -p "$d"
+    printf '%s  %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" \
+        >> "$d/history.log"
+}
+
+# Is there an OS in the slot? Reads the slot header directly rather than
+# powering the card, so `status` is cheap and side-effect free.
+slot_state()
+{
+    local d=$1
+    local hdr="$d/card_oshdr.bin"
+    [ -f "$hdr" ] || { echo "blank"; return; }
+    # The header is 16 bytes big-endian: magic 'SCOS'(4) version(2) len(4)
+    # image-crc(2) hdr-crc(2) state(2). See include/boot/boot_hdr.h -- the
+    # layout is hand-serialised there and read by offset here, never as a
+    # struct, for the same reason.
+    local magic state
+    magic=$(dd if="$hdr" bs=1 count=4 2>/dev/null | tr -d '\0')
+    if [ "$magic" != "SCOS" ]; then echo "blank"; return; fi
+    state=$(od -An -tx1 -j14 -N2 "$hdr" 2>/dev/null | tr -d ' \n')
+    case "$state" in
+    0000) echo "active" ;;
+    ffff) echo "loaded" ;;
+    *)    echo "unknown($state)" ;;
+    esac
+}
+
+# --- subcommands ------------------------------------------------------------
+
+cmd_new()
+{
+    local d; d=$(dir_for "${1:-}")
+    if [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ]; then
+        die "$(basename "$d") already exists; 'card recycle' to blank the OS \
+slot, or 'card rm $(basename "$d")' to delete it"
+    fi
+    mkdir -p "$d"
+    note "$d" "new -- blank chip created"
+    echo "card: created $(basename "$d") -- a blank chip, nothing programmed."
+    echo "      Next: tools/card load $(basename "$d")"
+}
+
+cmd_load()
+{
+    local name=${1:-default}
+    local d; d=$(dir_for "$name")
+    ensure_build
+    mkdir -p "$d"
+    local was; was=$(slot_state "$d")
+    if [ "$was" != "blank" ]; then
+        echo "card: slot is $was; loading over it (BOOTSEL is held for you)"
+    fi
+    note "$d" "load  <- $OSIMAGE (slot was $was)"
+    "$ROOT/tools/load-os.sh" "$d" "$OSIMAGE" || die "load failed"
+    echo "card: $name is now $(slot_state "$d"). Next: tools/card shell $name"
+}
+
+cmd_recycle()
+{
+    local name=${1:-default}
+    local d; d=$(dir_for "$name")
+    [ -d "$d" ] || die "no such card: $name (tools/card list)"
+    ensure_build
+    note "$d" "RECYCLE -- erasing the OS slot (was $(slot_state "$d"))"
+    "$ROOT/tools/load-os.sh" --recycle "$d" || die "recycle failed"
+    echo "card: $name is now $(slot_state "$d")."
+}
+
+#
+# THREE different kinds of "start over", and confusing them wastes real time.
+#
+#   recycle  erases the OS SLOT. The OS is gone, the card boots to the loader.
+#            The data NVM -- the filesystem -- is untouched.
+#   wipe     erases the data NVM. The OS stays loaded and re-personalises the
+#            factory file layout on its next power-up.
+#   rm       deletes the card directory entirely.
+#
+# The one that catches you is wipe. Changing the filesystem layout in src/ and
+# then running `card load` does NOT show you the new layout: fs_init() mounts
+# the existing image and only personalises a BLANK chip, which is exactly
+# right for a card and exactly surprising for a developer. The card answers
+# 6A82 for a file you just added and nothing looks broken.
+#
+cmd_wipe()
+{
+    local name=${1:-default}
+    local d; d=$(dir_for "$name")
+    [ -d "$d" ] || die "no such card: $name (tools/card list)"
+    note "$d" "WIPE -- erasing the data NVM (filesystem)"
+    rm -f "$d/card_eeprom.bin" "$d/card_flash.bin"
+    echo "card: $name -- data NVM erased. The OS is still $(slot_state "$d");"
+    echo "      it will re-personalise the factory file layout on next power-up."
+}
+
+cmd_status()
+{
+    local name=${1:-default}
+    local d; d=$(dir_for "$name")
+    [ -d "$d" ] || die "no such card: $name (tools/card list)"
+    local st; st=$(slot_state "$d")
+    echo "card:  $name"
+    echo "dir:   $d"
+    echo "slot:  $st"
+    case "$st" in
+    blank)
+        echo "       Nothing is programmed. Powering it on reaches the boot"
+        echo "       ROM, which answers the BOOT ATR. tools/card load $name"
+        ;;
+    loaded)
+        echo "       An image is present and verified but NOT activated, so the"
+        echo "       boot ROM will not start it. A load that stopped before"
+        echo "       ACTIVATE leaves exactly this state."
+        ;;
+    active)
+        echo "       The OS runs on power-up and answers its own ATR."
+        ;;
+    esac
+    if [ -f "$d/card_oshdr.bin" ]; then
+        echo ""
+        python3 "$ROOT/tools/mkldr.py" inspect "$d/card_oshdr.bin" 2>/dev/null \
+            || true
+    fi
+    if [ "$st" = "active" ] || [ "$st" = "loaded" ]; then
+        if [ -f "$OSIMAGE" ]; then
+            if card_is_current "$d"; then
+                echo "image: matches the current build"
+            else
+                echo "image: STALE -- src/ has been rebuilt since this was"
+                echo "       loaded. tools/card load $name"
+            fi
+        fi
+    fi
+    if [ -f "$d/history.log" ]; then
+        echo ""
+        echo "last changes to the slot:"
+        tail -5 "$d/history.log" | sed 's/^/  /'
+    fi
+    echo ""
+    echo "files:"
+    ls -la "$d" 2>/dev/null | tail -n +2 | sed 's/^/  /'
+}
+
+cmd_shell()
+{
+    local name=${1:-default}
+    local d; d=$(dir_for "$name")
+    [ -d "$d" ] || die "no such card: $name (tools/card new $name)"
+    ensure_build
+    local st; st=$(slot_state "$d")
+    if [ "$st" != "active" ]; then
+        echo "card: slot is $st, so this prompt reaches the BOOT ROM, not the" >&2
+        echo "      OS. tools/card load $name first if you wanted the OS." >&2
+    fi
+    if [ "$st" = "active" ] && ! card_is_current "$d"; then
+        echo "card: the loaded OS is NOT the current build -- src/ changed" >&2
+        echo "      since it was loaded. tools/card load $name" >&2
+    fi
+    echo "card: $name ($st). '.atr' for the ATR, '.quit' to leave." >&2
+    exec "$ROOT/tools/run-scv1.sh" --state-dir "$d" --boot
+}
+
+cmd_apdu()
+{
+    local name=${1:-default}
+    shift || true
+    # Allow both `card apdu 00A4...` and `card apdu mycard 00A4...` by
+    # treating a first argument that looks like hex as an APDU, not a name.
+    if [[ "$name" =~ ^[0-9A-Fa-f[:space:]]+$ ]] && [ ${#name} -ge 8 ]; then
+        set -- "$name" "$@"
+        name=default
+    fi
+    local d; d=$(dir_for "$name")
+    [ -d "$d" ] || die "no such card: $name (tools/card new $name)"
+    [ $# -gt 0 ] || die "usage: tools/card apdu [NAME] <hex> [<hex>...]"
+    ensure_build
+
+    # Same warning `shell` gives. Without it, every APDU comes back 6E00 from
+    # the boot ROM -- which is the boot ROM correctly refusing CLA 00, but
+    # reads as "the card rejected my command" if you did not know which
+    # program was answering.
+    local st; st=$(slot_state "$d")
+    if [ "$st" = "active" ] && ! card_is_current "$d"; then
+        echo "card: WARNING the loaded OS is not the current build; you are" >&2
+        echo "      testing an older image. tools/card load $name" >&2
+    fi
+    if [ "$st" != "active" ]; then
+        echo "card: slot is $st, so these APDUs reach the BOOT ROM (CLA 80)," >&2
+        echo "      not the OS. It will answer 6E00 to CLA 00. Run" >&2
+        echo "      'tools/card load $name' first." >&2
+    fi
+
+    #
+    # Structural check BEFORE sending anything.
+    #
+    # Hand-writing an APDU's length field goes wrong constantly -- four times
+    # in one session while building this, including writing an extended Lc as
+    # one byte instead of two, which the card correctly answered 6700. A bare
+    # 6700 tells you the frame was wrong; it does not tell you how, so you go
+    # looking at the card. This says which byte and why, before the card is
+    # even powered.
+    #
+    # It is a WARNING, not a refusal: sending a deliberately malformed APDU to
+    # see what the card does is a legitimate and frequent thing to want.
+    for a in "$@"; do
+        python3 - "${a//[[:space:]]/}" <<'PYEOF' || true
+import sys
+
+h = sys.argv[1]
+# A 1 KB extended APDU is 2066 hex characters. Printing all of it to say the
+# length field is wrong buries the message in the thing it is describing.
+label = h if len(h) <= 24 else f"{h[:16]}...{h[-4:]} ({len(h)//2} bytes)"
+if len(h) % 2:
+    print(f"card: {label}: odd number of hex digits", file=sys.stderr)
+    raise SystemExit(0)
+try:
+    b = bytes.fromhex(h)
+except ValueError:
+    print(f"card: {label}: not hex", file=sys.stderr)
+    raise SystemExit(0)
+
+n = len(b)
+if n < 4:
+    print(f"card: {label}: {n} bytes, need at least 4 (CLA INS P1 P2)",
+          file=sys.stderr)
+elif n == 4 or n == 5:
+    pass                                    # Case 1, or Case 2 short
+elif b[4] != 0:                             # short form
+    lc = b[4]
+    if n not in (5 + lc, 6 + lc):
+        want = f"{5+lc} (Case 3) or {6+lc} (Case 4)"
+        print(f"card: {label}: Lc={lc} so the frame should be {want} bytes, "
+              f"but it is {n}", file=sys.stderr)
+else:                                       # extended form
+    if n == 6:
+        print(f"card: {label}: a 00 introducer needs a 2-byte length after it, "
+              f"only 1 byte follows", file=sys.stderr)
+    elif n == 7:
+        pass                                # Case 2E: bytes 5-6 are Le
+    else:
+        lc = (b[5] << 8) | b[6]
+        if lc == 0:
+            print(f"card: {label}: extended Lc=0 is not encodable "
+                  f"(no data means Case 1 or Case 2)", file=sys.stderr)
+        elif n not in (7 + lc, 9 + lc):
+            want = f"{7+lc} (Case 3E) or {9+lc} (Case 4E)"
+            print(f"card: {label}: extended Lc={lc} (0x{lc:04X}) so the frame "
+                  f"should be {want} bytes, but it is {n}", file=sys.stderr)
+            if 5 + lc == n or 6 + lc == n:
+                print("      looks like Lc was written as ONE byte; the "
+                      "extended form needs two", file=sys.stderr)
+PYEOF
+    done
+
+    # The '.quit' is the whole reason this subcommand exists. A UART has no
+    # EOF, so piping APDUs into the card without it hangs forever -- a trap
+    # that cost a documentation fix once already.
+    local script=""
+    for a in "$@"; do
+        script+="${a//[[:space:]]/}"$'\n'
+    done
+    script+=".quit"$'\n'
+
+    local out
+    out=$(printf '%s' "$script" | "$ROOT/tools/run-scv1.sh" \
+              --state-dir "$d" --boot 2>/dev/null)
+
+    #
+    # The card's boot banner shares stdout with its responses -- a UART is one
+    # stream, and the firmware has nowhere else to print. So responses are
+    # taken only AFTER the "Waiting for" marker the firmware emits when it
+    # starts listening, and only lines that are bare hex.
+    #
+    # Matching bare hex alone is not enough and the first version of this did
+    # exactly that: it paired the first APDU against "SCV1 BOOT ROM: OS slot
+    # ACTIVE" and printed a trace that looked plausible and was nonsense. The
+    # marker is what makes it right; the hex test is belt and braces.
+    #
+    local -a got=()
+    local listening=0
+    while IFS= read -r line; do
+        line=${line%$'\r'}
+        if [ "$listening" = 0 ]; then
+            case "$line" in
+            *"Waiting for"*) listening=1 ;;
+            esac
+            continue
+        fi
+        [[ "$line" =~ ^[0-9A-Fa-f]+$ ]] || continue
+        got+=("$line")
+    done <<< "$out"
+
+    if [ "$listening" = 0 ]; then
+        die "the card never started listening. tools/card status $name"
+    fi
+
+    local rc=0 i=0
+    for a in "$@"; do
+        local sent=${a//[[:space:]]/}
+        local r=${got[$i]:-}
+        if [ -z "$r" ]; then
+            printf '> %s\n' "$sent"
+            printf '< (no response)\n'
+            rc=1
+        else
+            printf '> %s\n' "$sent"
+            printf '< %s\n' "$r"
+            # 9000 is success and 61XX is success-with-data-waiting. Anything
+            # else is a failure for scripting purposes.
+            case "$r" in
+            *9000) : ;;
+            *) if [[ "${r: -4:2}" != "61" ]]; then rc=1; fi ;;
+            esac
+        fi
+        i=$((i + 1))
+    done
+
+    if [ "${#got[@]}" -gt "$#" ]; then
+        printf 'card: %d extra response(s) the card sent unprompted\n' \
+            $(( ${#got[@]} - $# )) >&2
+        rc=1
+    fi
+    return $rc
+}
+
+cmd_list()
+{
+    if [ ! -d "$CARDS" ] || [ -z "$(ls -A "$CARDS" 2>/dev/null)" ]; then
+        echo "card: no cards yet. tools/card load  (creates 'default')"
+        return 0
+    fi
+    printf '%-16s %-8s %s\n' NAME SLOT DIR
+    for d in "$CARDS"/*/; do
+        [ -d "$d" ] || continue
+        printf '%-16s %-8s %s\n' "$(basename "$d")" "$(slot_state "${d%/}")" "$d"
+    done
+}
+
+cmd_rm()
+{
+    [ $# -ge 1 ] || die "usage: tools/card rm NAME"
+    local d; d=$(dir_for "$1")
+    [ -d "$d" ] || die "no such card: $1"
+    rm -rf "$d"
+    echo "card: removed $1"
+}
+
+usage() { sed -n '4,40p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# --- dispatch ---------------------------------------------------------------
+
+[ $# -ge 1 ] || { usage; exit 0; }
+sub=$1; shift
+case "$sub" in
+new)     cmd_new "$@" ;;
+load)    cmd_load "$@" ;;
+recycle) cmd_recycle "$@" ;;
+wipe)    cmd_wipe "$@" ;;
+status)  cmd_status "$@" ;;
+shell)   cmd_shell "$@" ;;
+apdu)    cmd_apdu "$@" ;;
+list)    cmd_list "$@" ;;
+rm)      cmd_rm "$@" ;;
+-h|--help|help) usage ;;
+*) die "unknown subcommand '$sub' (tools/card --help)" ;;
+esac

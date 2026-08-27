@@ -35,7 +35,7 @@ distinguishable. Revisit in M3 when access conditions make the trade-off real.
 
 ---
 
-## M2b -- Dynamic filesystem :: IN PROGRESS
+## M2b -- Dynamic filesystem :: DONE
 
 **Why split from M2a:** `CREATE FILE` needs a BER-TLV parser to read FCP
 templates. That is a second untrusted-input parser and deserves its own tests
@@ -62,8 +62,58 @@ and fuzz targets rather than being tacked onto a working milestone.
   EF's data bytes. `fs_store`'s data area is a bump allocator, so deleting
   leaks space. Compaction needs atomic data movement, which needs M4. Asserted
   in `test_create.c` so it cannot regress silently.
-* `ACTIVATE FILE` / `DEACTIVATE FILE` (44 / 04) :: TODO -- a file can be
-  *created* deactivated today, but not moved between states afterwards.
+* **`ACTIVATE FILE` / `DEACTIVATE FILE` (44 / 04)** :: DONE --
+  `src/filesystem/cmd_lifecycle.c`.
+
+  Scope: `P1=P2=00`, no data field, acting on the currently selected file.
+  ISO/IEC 7816-9 also defines path- and identifier-based addressing, refused
+  with `6A86` rather than guessed at -- the encoding of that data field is
+  something this project would be inventing. `6A86` and not `6D00`, because the
+  instruction *is* supported and a reader told otherwise stops using it.
+
+  A data field is **refused with `6A87`, not ignored.** With `P1-P2` zero the
+  target is the selection, so a file identifier in the data field is one the
+  card is not reading; accepting it silently would let a reader believe it had
+  deactivated `6F01` while the card deactivated whatever happened to be
+  selected. A successful answer to a command that did something else is the
+  worst available outcome for this command.
+
+  Repeating either command succeeds. Not laxity: if the response is lost on the
+  link the reader's only recourse is to send it again, and failing the retry
+  would leave a correct reader unable to finish a correct sequence.
+
+  **This command found a one-way door, and closing it changed the
+  filesystem.** Both commands address the selected file, and `fs.c` refused to
+  select anything not `ACTIVATED` -- so a deactivated file could never be
+  named, and therefore never reactivated by any APDU. Deactivation was
+  reachable by command and reversible only by rewriting the descriptor from
+  inside the OS. That is the boot loader's ACTIVE-slot bug one layer up, and it
+  was pinned by a test whose own comment claimed the state was reversible.
+
+  The fix splits two ideas that had been one:
+
+  | | accepts | refuses |
+  |---|---|---|
+  | `resolve_selectable()` -- selection | ACTIVATED, DEACTIVATED | CREATION, INITIALISED, TERMINATED |
+  | `resolve()` -- data access | ACTIVATED | everything else |
+
+  Selection is navigation and inspection; it grants nothing. `TERMINATED` stays
+  unselectable because it is irreversible by design, so no administrative
+  action remains that needs to name the file.
+
+  And the data gate got **stronger**, not weaker: `fs_ef_read`/`fs_ef_write`
+  now walk the ancestors via `ancestors_usable()`. Before that, deactivating a
+  DF refused operations on the DF while every EF inside stayed perfectly
+  readable -- an administrator who deactivated a directory to take an
+  application out of service would have taken nothing out of service, and the
+  card would have answered `9000` to the command that did nothing. The walk is
+  bounded by `FS_MAX_FILES` rather than by reaching the root, so a corrupt
+  image with a cyclic parent chain terminates with `6581` instead of looping.
+
+  The MF can never be deactivated: it is the only entry point to the tree, so
+  turning it off is bricking the card, not administering it. Taking a whole
+  card out of service is `TERMINATE CARD`'s job, deliberately a different
+  command that does not exist yet.
 * **`GET RESPONSE` (C0) and `61XX`** :: DONE -- `src/apdu/cmd_get_response.c`.
   This was not a checklist item: before it, a Case 3 SELECT answered `9000`
   with **no data**, so a conformant reader sending the project's own canonical
@@ -166,7 +216,52 @@ and fuzz targets rather than being tacked onto a working milestone.
   payloads of 600, 700 and 1024 bytes, and a new extended-form generator in
   the fuzz driver -- `gen_apdu_like` writes `Lc` as one byte at `buf[4]` and
   so could never produce this shape at all.
-* EF.ATR (`2F01`) :: TODO
+* **EF.ATR (`2F01`)** :: DONE -- created by `fs_personalise()` in
+  `src/filesystem/fs.c`.
+
+  The ATR is clocked out before any command and cannot change at run time, so
+  anything a reader must learn that is not in the ATR has to be readable
+  somewhere. ISO/IEC 7816-4 reserves `2F01` directly under the MF for that.
+
+  Contents: one data object, card capabilities, tag `47`, three bytes.
+
+  ```
+  47 03 00 00 40
+        ^^ ^^ ^^
+        |  |  byte 3: extended Lc and Le supported
+        |  byte 2: data coding        -- NOT asserted
+        byte 1: DF selection methods  -- NOT asserted
+  ```
+
+  Byte 3 is what this milestone made true, and the **only** bit set is
+  extended-length support. The command-chaining bit is left clear because
+  `apdu_check_cla()` refuses chaining with `6884`, and a card that advertises a
+  command it rejects is worse than one that advertises nothing. A test asserts
+  both halves of that statement together so they cannot drift apart.
+
+  **Bytes 1 and 2 are zero and that is a decision.** Their bit assignments are
+  not something this project has the specification text to state precisely, and
+  EF.ATR is the one file whose entire purpose is to tell a reader the truth
+  about the card -- guessing a layout here would be worse than saying nothing.
+  A zero byte *under-claims*: it reports no capability where the card does
+  support several selection methods. Under-claiming is the safe direction. A
+  reader that finds no advertised capability falls back and works; a reader
+  that trusts an invented bit does something wrong and blames the card.
+
+  **KNOWN LIMITATION**: the extended-length capability bit is a boolean. It
+  says the encoding is supported; it cannot say that this card's ceiling is
+  `SCOS_APDU_EXT_DATA_MAX` (1 KB) rather than 65535. Publishing the real
+  maximum belongs in the maximum-length data objects of EF.ATR/INFO, not
+  emitted for the same reason bytes 1 and 2 are blank. Until then a reader
+  discovers the ceiling by being refused with `6700`.
+
+  No SFI. A short EF identifier is scarce -- 1..30 across a DF -- and a reader
+  finds EF.ATR by the well-known identifier `2F01`, which is the entire point
+  of ISO reserving that value.
+
+  The file is sized to its content exactly. Trailing `0xFF` would read to a
+  BER-TLV parser as the start of a malformed object rather than as end-of-data,
+  so an over-long EF.ATR is worse than an absent one.
 
 ---
 
@@ -323,7 +418,7 @@ rather than an accident.
 |---|---|---|---|
 | Card interface | **ISO/IEC 7816-3** | electrical interface, ATR, transmission protocols T=0/T=1 | ATR structure followed; **T=0/T=1 framing is NOT implemented** -- the simulator carries APDUs over a line protocol and the chip over a UART. See below. |
 | APDU & commands | **ISO/IEC 7816-4** | APDU structure, command/response pairs, file organisation, security environment | the backbone of the project. Cases 1-4 short **and extended**, status words, MF/DF/EF, FCI/FCP templates, BER-TLV, SELECT / READ BINARY / UPDATE BINARY, GET RESPONSE / 61XX. Extended `Lc` is capped at 1 KB by a documented ceiling, not at 65535 -- see M2b. Command chaining, secure messaging and logical channels are refused with the specific status word for each (6884 / 6882 / 6881) rather than a blanket 6E00. |
-| Administrative commands | **ISO/IEC 7816-9** | CREATE FILE, DELETE FILE, ACTIVATE / DEACTIVATE, life cycle | CREATE FILE and DELETE FILE done (M2b), with one documented deviation: we do not select the newly created file. ACTIVATE/DEACTIVATE FILE not yet. |
+| Administrative commands | **ISO/IEC 7816-9** | CREATE FILE, DELETE FILE, ACTIVATE / DEACTIVATE, life cycle | CREATE FILE, DELETE FILE, ACTIVATE FILE and DEACTIVATE FILE done (M2b). Two documented deviations: the newly created file is not selected, and ACTIVATE/DEACTIVATE support only the current-selection form (`P1=P2=00`), refusing path addressing with 6A86. TERMINATE CARD / TERMINATE DF not implemented. |
 | Data objects | **ISO/IEC 7816-5 / -6** | application identifiers (AID), interindustry data elements | not implemented. SELECT by DF name (P1=04) returns 6A81 and is deferred to M7, where AIDs first mean something. |
 | Cryptographic data | **ISO/IEC 7816-15** | cryptographic information application, key and certificate objects | not started. Depends on M5. |
 | Multi-application OS | **GlobalPlatform Card Specification** | application load / install / delete, Security Domains, life cycle, SCP secure channels | not started. M7. **No compliance will be claimed** -- see the standing rule below. |

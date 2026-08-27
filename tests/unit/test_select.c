@@ -134,8 +134,10 @@ TEST(select_p2_no_response_data_accepted)
 TEST(select_unknown_file_is_6a82)
 {
     fresh();
-    /* 2F01 is not in the factory layout. */
-    const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x01 };
+    /* 2F02 is not in the factory layout. NOT 2F01: that is EF.ATR, which the
+     * card now really has -- this test used it as a stand-in for "absent" and
+     * started failing with 61XX the moment the file became real. */
+    const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x02 };
     CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_FILE_NOT_FOUND);
     /* The failure must not have moved the selection off the MF. */
     CHECK_HEX(current_df_fid(), 0x3F00);
