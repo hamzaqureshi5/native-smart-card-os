@@ -94,6 +94,65 @@ if(SCOS_SANITIZE)
     -fsanitize=address,undefined)
 endif()
 
+# ------------------------------------------------------------- crypto --------
+#
+# mbedTLS, vendored at third_party/mbedtls and pinned to the 3.6 LTS tag,
+# compiled from source into BOTH the host and the ARM builds.
+#
+# Not linked from the distribution package, and the reason is not preference:
+# there is no distribution package for a bare-metal ARM card. Linking
+# libmbedtls.so would give the simulator a hash and the chip nothing, and the
+# property this project rests on is that the OS is the same code on both
+# targets -- a passing host test has to be evidence about the card.
+#
+# Only the primitives are built. config/scos_mbedtls_config.h turns off the
+# heap, the filesystem, the clock, the entropy stack and all of TLS; see the
+# reasoning in that file.
+
+set(SCOS_MBEDTLS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls")
+if(NOT EXISTS "${SCOS_MBEDTLS_DIR}/library/sha256.c")
+  message(FATAL_ERROR
+    "third_party/mbedtls is missing or empty. It is a git submodule:\n"
+    "  git submodule update --init --depth 1 third_party/mbedtls")
+endif()
+
+add_library(scos_mbedtls STATIC
+  "${SCOS_MBEDTLS_DIR}/library/sha256.c"
+  "${SCOS_MBEDTLS_DIR}/library/platform_util.c"
+)
+target_include_directories(scos_mbedtls PUBLIC
+  "${SCOS_MBEDTLS_DIR}/include"
+)
+target_include_directories(scos_mbedtls PRIVATE
+  # common.h and the other private headers live beside the sources.
+  "${SCOS_MBEDTLS_DIR}/library"
+)
+target_compile_definitions(scos_mbedtls PUBLIC
+  MBEDTLS_CONFIG_FILE="${CMAKE_CURRENT_SOURCE_DIR}/config/scos_mbedtls_config.h"
+)
+# NOT scos_warnings, deliberately. Our warning set is deliberately hostile
+# (-Wconversion, -Wswitch-enum, -Werror) and it is aimed at OUR code. Applying
+# it to a vendored library means either patching upstream -- which makes the
+# submodule a fork and the next update a merge -- or turning the warning off
+# for everyone. Third-party code is compiled as its authors intended.
+target_compile_options(scos_mbedtls PRIVATE -w)
+target_link_libraries(scos_mbedtls PUBLIC scos_sanitizers)
+
+# The seam itself. This is the only place mbedTLS headers are visible; the
+# dependency is PRIVATE so nothing above can reach them by accident.
+add_library(scos_crypto STATIC
+  src/crypto/crypto_mbedtls.c
+  # Separate on purpose: this is the only file in the seam that needs the HAL.
+  # See the comment at the top of it.
+  src/crypto/crypto_random.c
+)
+target_include_directories(scos_crypto PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(scos_crypto PRIVATE scos_mbedtls scos_warnings)
+target_link_libraries(scos_crypto PUBLIC scos_sanitizers)
+target_compile_options(scos_crypto PRIVATE -ffreestanding)
+
 # ---------------------------------------------------------- shared leaf ------
 #
 # Code used by BOTH the OS and the boot loader. Kept in its own library so that
@@ -132,12 +191,15 @@ add_library(scos_core STATIC
   src/filesystem/cmd_binary.c
   src/filesystem/cmd_create.c
   src/filesystem/cmd_lifecycle.c
+  src/security/pin.c
+  src/security/cmd_verify.c
+  src/security/cmd_change_ref.c
 )
 target_include_directories(scos_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(scos_core PRIVATE scos_warnings)
-target_link_libraries(scos_core PUBLIC scos_sanitizers scos_util)
+target_link_libraries(scos_core PUBLIC scos_sanitizers scos_util scos_crypto)
 
 # Freestanding discipline, enforced by the compiler rather than by review:
 # no builtin libc calls beyond the memory intrinsics the codegen may emit.
@@ -183,6 +245,10 @@ elseif(SCOS_HAL STREQUAL "arm-scv1")
     src/hal/arm-scv1/hal_arm_nvm.c
     src/hal/arm-scv1/hal_arm_io.c
     src/hal/arm-scv1/hal_arm_platform.c
+    # The four libc functions a freestanding link cannot do without. Only in
+    # the cross build: defining memcpy in the host build would collide with
+    # glibc. See the file's header for why they are needed at all.
+    src/hal/arm-scv1/freestanding.c
   )
   target_include_directories(scos_hal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/hal/arm-scv1")
 elseif(SCOS_HAL STREQUAL "s3m228a")
@@ -208,6 +274,30 @@ target_include_directories(scos_hal PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(scos_hal PUBLIC scos_sanitizers)
+
+#
+# crypto_random.c calls hal_random_bytes, so libscos_crypto.a must be resolved
+# against libscos_hal.a. Stated here rather than at the crypto target because
+# scos_hal does not exist yet at that point -- the HAL is selected below the
+# libraries that use it, which is the right order for everything except this.
+#
+# Without it the link order is whatever the dependency graph produces, and
+# libscos_hal.a can end up BEFORE libscos_crypto.a on the command line. A
+# static archive only contributes objects for symbols that are already
+# undefined when the linker reaches it, so hal_random_bytes was discarded
+# before anything asked for it -- an "undefined reference" for a function that
+# is present and compiled.
+#
+target_link_libraries(scos_crypto PRIVATE scos_hal)
+
+#
+# And the vendored library needs it too, one level deeper: mbedTLS calls
+# memcpy/memset by name, and on the cross build those come from
+# src/hal/arm-scv1/freestanding.c because there is no libc. Same ordering
+# problem, same fix -- without this, libscos_hal.a is placed before
+# libscos_mbedtls.a and the definitions are discarded before anything asks.
+#
+target_link_libraries(scos_mbedtls PRIVATE scos_hal)
 
 # ------------------------------------------------------------- simulator -----
 

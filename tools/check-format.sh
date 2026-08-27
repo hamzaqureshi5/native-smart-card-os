@@ -47,7 +47,15 @@ if [ "$HAVE" != "$WANT_VERSION" ]; then
 fi
 
 # Only our own sources. Nothing generated, nothing vendored.
+#
+# Note what is NOT listed: third_party/. Reformatting a vendored submodule
+# would turn it into a fork whose next update is a merge conflict on every
+# line, and third-party code is compiled as its authors intended (see the
+# -w in CMakeLists.txt for the same reason). The -prune below makes that a
+# stated exclusion rather than an accident of this list.
+#
 FILES=$(cd "$ROOT" && find src include simulator tests \
+        -path './third_party' -prune -o \
         -name '*.c' -o -name '*.h' | sort)
 
 BAD=""

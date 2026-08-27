@@ -99,6 +99,34 @@ differently than assumed.
 * how debug is disabled for production, and whether that is irreversible
 * the lifecycle-state mechanism the chip enforces in hardware
 
+## A hardware requirement discovered in M3: the TRNG
+
+The PIN verifier is a salted hash, and the salt comes from
+`crypto_random_bytes()` -> `hal_random_bytes()`. On this simulator that is a
+**seeded xorshift PRNG**, reproducible on purpose so tests are deterministic --
+which means two simulated cards draw the identical salt.
+
+That is fine for a simulator and fatal on a card. A part whose TRNG is
+predictable has, in effect, no salt at all: identical PINs produce identical
+verifiers, so one precomputed table breaks every card in a batch, and a
+verifier read from one card gives you the PIN of another.
+
+So the port must establish, from documentation:
+
+* how the TRNG is started and read;
+* how its **health test** reports failure -- and that failure must surface as
+  `HAL_ERR` rather than as zeroes, because `crypto_random_bytes()` refuses
+  rather than falling back to a software PRNG, and that refusal is only useful
+  if the HAL tells the truth;
+* whether the part is certified for the entropy source (AIS-31, SP 800-90B or
+  equivalent), since that is the claim a security evaluation will ask about.
+
+A test asserting cross-card salt uniqueness cannot pass on this HAL and was
+deliberately removed rather than weakened; see the note in `docs/roadmap.md`
+under M3. It should be **re-added as the first test of any real port**.
+
+---
+
 ## A real reference point: Samsung S3M228A
 
 Samsung publishes a product page for the **S3M228A**, a SIM part in mass

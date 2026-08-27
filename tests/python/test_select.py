@@ -138,8 +138,10 @@ class TestProtocolErrors(CardTestCase):
         #   B0 / D6  -> M2a  (test_filesystem.py)
         #   E0 / E4  -> M2b  (test_create.py)
         #   C0       -> M2b  (test_get_response.py)
-        # Still absent: VERIFY (M3) and GET DATA.
-        for ins in ("20", "CA"):
+        #   44 / 04  -> M2b  (test_lifecycle.py)
+        #   20       -> M3   (test_pin.py)
+        # Still absent: GET DATA.
+        for ins in ("CA",):
             self.assertSW(
                 self.card.send_apdu(f"00{ins}0000"),
                 SW_INS_NOT_SUPPORTED,

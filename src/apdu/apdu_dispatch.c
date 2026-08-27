@@ -16,9 +16,10 @@ static const scos_cmd_entry k_commands[] = {
     { INS_UPDATE_BINARY, "UPDATE BINARY", scos_cmd_update_binary },
     { INS_CREATE_FILE, "CREATE FILE", scos_cmd_create_file },
     { INS_DELETE_FILE, "DELETE FILE", scos_cmd_delete_file },
+    { INS_VERIFY, "VERIFY", scos_cmd_verify },
+    { INS_CHANGE_REF_DATA, "CHANGE REFERENCE DATA", scos_cmd_change_ref_data },
     { INS_ACTIVATE_FILE, "ACTIVATE FILE", scos_cmd_activate_file },
     { INS_DEACTIVATE_FILE, "DEACTIVATE FILE", scos_cmd_deactivate_file },
-    /* M3 adds VERIFY. */
 };
 
 uint16_t scos_dispatch(scos_kernel *k, const apdu_command *cmd,
@@ -52,6 +53,8 @@ const char *scos_ins_name(uint8_t ins)
         return "UPDATE BINARY";
     case INS_GET_DATA:
         return "GET DATA";
+    case INS_CHANGE_REF_DATA:
+        return "CHANGE REFERENCE DATA";
     case INS_CREATE_FILE:
         return "CREATE FILE";
     case INS_DELETE_FILE:

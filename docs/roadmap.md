@@ -305,18 +305,160 @@ images wait on M5; a one-way fuse needs real silicon. Tracked in
 
 ---
 
-## M3 -- Security
+## M3 -- Security :: IN PROGRESS
 
-* PIN object with verifier (**never the plaintext PIN in NVM**), salted hash
-* retry counter **decremented before verification** -- otherwise cutting power
-  after a failed attempt restores the try, a real and repeatedly-exploited
-  attack. This is why the counter lives in byte-writable EEPROM.
-* blocked state, and whether it is recoverable (PUK) or terminal
-* `VERIFY`, `63CX` (X tries remaining), `6983` when blocked
-* authentication state, cleared on reset
-* per-file access conditions enforced in the command path
-* tests: correct/incorrect PIN, decrement, exhaustion, blocked, reset behaviour,
-  brute force, unauthorized file access, and **power-cut-after-failed-verify**
+* **the crypto seam** :: DONE -- `include/crypto/crypto.h`, backed by mbedTLS.
+
+  M5's deliverable, pulled forward because M3's first item cannot exist without
+  a hash. mbedTLS is vendored at `third_party/mbedtls`, pinned to the 3.6 LTS
+  tag, and compiled from source into **both** builds.
+
+  Not linked from the distribution package, and that is not a preference:
+  there is no distribution package for a bare-metal ARM card. Linking
+  `libmbedtls.so` would give the simulator a hash and the chip nothing, and the
+  property this project rests on is that the OS is the same code on both
+  targets -- a passing host test has to be evidence about the card.
+
+  `config/scos_mbedtls_config.h` turns off the heap, the filesystem, the clock,
+  the entropy stack and all of TLS; each exclusion is listed with its reason so
+  a later reader can tell "considered and rejected" from "not yet looked at".
+  The heap one is load-bearing: the `_Static_assert` on `sizeof(scos_kernel)`
+  is what keeps the RAM budget honest, and a library that allocated would make
+  that measurement a fiction.
+
+  Verified against FIPS 180-4 published vectors and, in the Python suite,
+  against `hashlib` -- two independent oracles rather than the implementation's
+  own author. `crypto_equal_ct` uses a `volatile` accumulator rather than
+  `memcmp`, because `memcmp` returns on the first differing byte and its timing
+  reveals how many leading bytes were right: for a 32-byte verifier that is the
+  difference between 2^256 and 32x256 attempts, and a card is the worst place
+  to leak it since the attacker holds the clock.
+
+  Cost on the card: 3,228 bytes of ARM Thumb code.
+
+* **PIN object with a salted verifier** :: DONE -- `src/security/pin.c`.
+
+  The record is hand-serialised into EEPROM, never a C struct, for the reason
+  `fs_store.c` gives. `include/os/nvm_map.h` is new and owns the EEPROM layout,
+  with `_Static_assert`s that the filesystem and security regions cannot
+  overlap -- two subsystems each certain they own offset 0 would have shown up
+  as a filesystem that corrupts when a PIN is changed.
+
+  **The retry counter is a unary tally, not a number**, and that is the
+  design's keystone. The counter must be decremented durably *before* the PIN
+  is compared. As an integer that means writing the count and updating the
+  record's CRC -- three bytes, two writes, not atomic -- and a power cut
+  between them leaves a record whose CRC says "corrupt", whose only safe
+  reading is "blocked". So an attacker could brick a card by timing a power
+  cut, and a naive implementation might instead restore the last good value and
+  hand the try back.
+
+  As a bitmap, spending a try clears the lowest set bit: **one** byte write,
+  and it only ever clears. That buys three properties at once -- atomic (a
+  power cut leaves the old byte or the new one, both valid counts), monotonic
+  (a glitched write can only lose bits, and losing a bit loses a *try*, the
+  safe direction), and interpretable without integrity protection (all 256
+  values map to a well-defined count), which is what lets the field sit outside
+  the CRC. Same trick as the boot loader's state word, for the same reason.
+
+  Try limit caps at 8 because the tally is one byte. Real cards use 3.
+
+* **`VERIFY` (20), `63CX`, `6983`** :: DONE -- `src/security/cmd_verify.c`.
+
+  Two forms. `Lc=0` is a status query that spends nothing -- without it a
+  reader wanting to know whether authentication is required must *attempt* a
+  PIN to find out, and a wrong guess costs the cardholder a try. `Lc>0` is the
+  attempt.
+
+  `63CX` gives the remaining count deliberately: a reader that cannot say "two
+  attempts left" leads to cards blocked by accident, and hiding it buys nothing
+  because an attacker counts their own attempts. `6983` rather than `63C0` when
+  blocked, because a reader receiving `63C0` may reasonably retry.
+
+  A malformed length is refused **before** `pin_verify` is called, and that
+  ordering is the point: `pin_verify` spends the try before it looks at the
+  value, so a length check inside it would let a reader burn a cardholder's
+  attempts with junk that was never compared against anything.
+
+  P1 must be `00`. ISO assigns other values -- notably `FF`, which *resets* the
+  security status rather than establishing it -- refused with `6A86` rather than
+  approximated, because implementing "forget that I authenticated" as a side
+  effect of a misread P1 would be a security bug in the quietest possible form.
+
+* **`CHANGE REFERENCE DATA` (24)** :: DONE -- `src/security/cmd_change_ref.c`.
+
+  Needed because `pin_personalise()` deliberately ships **no default PIN**: a
+  fixed factory PIN in source would be a published credential, identical on
+  every card built from this tree and preserved in the git history for good.
+  Real cards receive a transport PIN during personalisation, from data that is
+  not in the source tree.
+
+  The access rule is what makes the PIN mean anything before per-file access
+  conditions land: UNSET is allowed (initial personalisation, no credential
+  exists yet), ACTIVE requires the reference to have been verified in this
+  session (`6982` otherwise), BLOCKED is refused (`6983`) because changing a
+  blocked PIN would be an unblock without the PUK. Without the middle rule this
+  command is an unauthenticated overwrite and every counter and constant-time
+  comparison in `pin.c` is decoration.
+
+  P1 = `01` only (new value). P1 = `00` carries old-then-new in one field,
+  which requires a fixed PIN length to split; this project imposes no PIN
+  format, so it is refused rather than guessed at.
+
+* **authentication state, cleared on reset** :: DONE -- a bitmask in
+  `scos_kernel`, so `scos_reset()`'s zero-the-struct clears it by construction.
+  Volatile on purpose: a card that remembered a PIN across power would mean a
+  stolen card needs no PIN. A failed attempt also drops an existing
+  authentication -- otherwise one success followed by wrong guesses leaves the
+  session authenticated while the counter runs down.
+
+* **blocked is TERMINAL on this card** -- a deliberate answer to the "PUK or
+  terminal?" question above, not an omission. `PIN_REF_UNBLOCK` exists and is
+  addressable so the record layout and the EEPROM map do not have to change,
+  but `RESET RETRY COUNTER` (INS 2C) is not implemented, so nothing can unblock
+  a blocked PIN. Next item in this milestone.
+
+* per-file access conditions enforced in the command path :: TODO. This is what
+  closes the holes `fs.h` currently documents in as many words: `CREATE FILE`,
+  `DELETE FILE`, `ACTIVATE`/`DEACTIVATE FILE` are still unauthenticated, and
+  FCP tags 86 and 8C are *refused* by `cmd_create.c` rather than ignored
+  precisely so this can land honestly.
+
+* `RESET RETRY COUNTER` (2C) with the PUK :: TODO
+* license key :: TODO
+
+* **tests** :: `tests/unit/test_pin.c` (878 checks) and
+  `tests/python/test_pin.py` (9). Correct and incorrect PIN, decrement,
+  exhaustion, blocked-is-terminal, the correct PIN failing to unblock, brute
+  force, authentication lifetime, re-verify not being a free oracle, and a scan
+  of the whole EEPROM confirming the plaintext PIN appears nowhere in it.
+
+  **NOT covered, and the gap is real**: a power cut in the *middle* of a
+  verify, between the counter being committed and the value being compared.
+  That instant is what the design is built around, and reaching it needs M4's
+  fault-injection hook in `hal_nvm_write()`. What is proven today is that the
+  counter is durable after the call and across a real power cycle. The
+  interrupted-write case is M4's to prove, and until then the claim is
+  "resists power interruption at command granularity", not "tear-resistant".
+
+### Two honest limitations recorded rather than glossed
+
+**The hash does not make the PIN safe.** A 4-digit PIN behind a salted
+SHA-256 is ten thousand hashes to anyone who can read NVM and compute, which is
+instant. The real protection is the retry counter plus the chip's memory
+protection, and this project models neither the chip nor its protection. Read
+the verifier as making casual disclosure ineffective, not as making offline
+attack hard.
+
+**Salt uniqueness across cards is not testable here.** The simulator's
+`hal_random_bytes()` is a seeded xorshift PRNG, reproducible on purpose so
+tests are deterministic -- so two simulated cards draw the *same* salt. A test
+asserting cross-card uniqueness was written, failed, and was replaced by ones
+that check what is actually checkable: that the salt participates, that a fresh
+one is drawn per `pin_set`, and that it is not all zeroes. Cross-card
+uniqueness is a **hardware requirement** on the TRNG, recorded in
+`docs/hardware-port.md`. A card whose TRNG is predictable has, in effect, no
+salt.
 * License should be verified in order to use OS ... create a static license key initially later we will make it proper dynamic license key.
 Depends on M4 for that last one to be fully honest.
 

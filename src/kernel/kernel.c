@@ -3,6 +3,7 @@
  * kernel.c -- Command execution and the card's main loop.
  */
 #include "os/kernel.h"
+#include "security/pin.h"
 
 #include "apdu/apdu.h"
 #include "apdu/dispatch.h"
@@ -33,7 +34,24 @@ scos_status scos_init(scos_kernel *k)
         return SCOS_ERR_STATE;
     }
 
+    /*
+     * Mount the security store, formatting a blank one.
+     *
+     * AFTER the filesystem and reported the same way: a card whose PIN records
+     * are corrupt is not a card that should answer commands as if they were
+     * fine. It comes up in FS_ERROR -- the name is now slightly narrow, but
+     * the behaviour is right: 6581 to everything, no silent reformat. Silently
+     * re-formatting the security store would reset a blocked PIN to unset,
+     * which is an attacker's preferred outcome.
+     */
+    const pin_status pst = pin_init();
+    if (pst != PIN_OK) {
+        k->lifecycle = SCOS_LC_FS_ERROR;
+        return SCOS_ERR_STATE;
+    }
+
     fs_selection_reset(&k->sel);
+    k->auth      = 0u;
     k->lifecycle = SCOS_LC_OPERATIONAL;
     return SCOS_OK;
 }

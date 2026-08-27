@@ -33,7 +33,20 @@ endif()
 # Permitted undefined symbols in the OS core:
 #
 #   hal_*        the entire point: the HAL is the core's only dependency
-#   scos_* os_* apdu_* fs_* crc16
+#   crypto_*     the SECOND seam, added in M3, and allowed for exactly the same
+#                reason as hal_*: it is a platform service the core states a
+#                need for and cannot see the implementation of. On this build
+#                it is mbedTLS compiled from third_party/; on a real part it
+#                should be the chip's crypto accelerator, and on a part with
+#                hardware key slots the key material would never enter RAM.
+#                Nothing above include/crypto/crypto.h can tell which.
+#
+#                Note what this does NOT permit. The core may call the seam; it
+#                may not reach the library behind it. src/crypto/ is the only
+#                place mbedtls headers are visible, and the dependency is
+#                PRIVATE in CMake, so an mbedtls_* symbol appearing here would
+#                still be a violation.
+#   scos_* os_* apdu_* fs_* pin_* crc16
 #                cross-translation-unit references inside the core itself
 #   memcpy/memset/memmove/memcmp
 #                GCC and Clang emit calls to these from ordinary struct
@@ -52,8 +65,10 @@ endif()
 #                there.
 set(allowed_regex
     "^hal_"
+    "^crypto_"  # the M3 seam; see the note above -- mbedtls_* is still barred
     "^scos_"
     "^os_"
+    "^pin_"     # src/security/pin.c, core's own
     "^apdu_"
     "^fs_"
     "^tlv_"     # added when CREATE FILE became the first core caller of the

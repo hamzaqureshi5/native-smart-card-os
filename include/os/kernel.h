@@ -73,6 +73,22 @@ typedef struct {
     uint8_t  rsp[SCOS_APDU_RSP_MAX];
     uint16_t rsp_len;
 
+    /* --- authentication state --------------------------------------------- */
+    /*
+     * One bit per successfully verified PIN reference: bit (ref-1).
+     *
+     * VOLATILE ON PURPOSE, and the reason is the whole point of the field. A
+     * card must forget that a PIN was presented the moment power or the
+     * session goes away -- otherwise pulling the card and re-inserting it
+     * would leave it authenticated, and a stolen card would need no PIN at
+     * all. scos_reset() zeroes the entire struct, so this is cleared by
+     * construction rather than by anyone remembering to clear it.
+     *
+     * A bitmask rather than a bool because the PUK is a second reference and
+     * being unblocked is not the same as being authenticated.
+     */
+    uint8_t auth;
+
     /* --- response waiting for GET RESPONSE -------------------------------- */
     /*
      * Under T=0 a command cannot return data the reader did not ask for: the
@@ -94,6 +110,28 @@ typedef struct {
     uint16_t pending_len;
     uint16_t pending_pos;
 } scos_kernel;
+
+/* --- authentication helpers ------------------------------------------------ */
+
+static inline bool scos_is_authenticated(const scos_kernel *k, uint8_t ref)
+{
+    return k != NULL && ref >= 1u && ref <= 8u &&
+           (k->auth & (uint8_t)(1u << (ref - 1u))) != 0u;
+}
+
+static inline void scos_set_authenticated(scos_kernel *k, uint8_t ref)
+{
+    if (k != NULL && ref >= 1u && ref <= 8u) {
+        k->auth = (uint8_t)(k->auth | (uint8_t)(1u << (ref - 1u)));
+    }
+}
+
+static inline void scos_clear_authenticated(scos_kernel *k, uint8_t ref)
+{
+    if (k != NULL && ref >= 1u && ref <= 8u) {
+        k->auth = (uint8_t)(k->auth & (uint8_t)~(uint8_t)(1u << (ref - 1u)));
+    }
+}
 
 _Static_assert(sizeof(scos_kernel) <= SCOS_OS_RAM_BUDGET_BYTES,
                "OS working set exceeds the configured RAM budget; either "

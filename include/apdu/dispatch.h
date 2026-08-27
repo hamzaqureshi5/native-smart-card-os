@@ -36,14 +36,15 @@ uint16_t scos_dispatch(scos_kernel *k, const apdu_command *cmd,
 const char *scos_ins_name(uint8_t ins);
 
 /* --- ISO/IEC 7816-4 instruction codes implemented or planned ------------- */
-#define INS_SELECT        0xA4u
-#define INS_GET_RESPONSE  0xC0u
-#define INS_VERIFY        0x20u
-#define INS_READ_BINARY   0xB0u
-#define INS_UPDATE_BINARY 0xD6u
-#define INS_GET_DATA      0xCAu
-#define INS_CREATE_FILE   0xE0u
-#define INS_DELETE_FILE   0xE4u
+#define INS_SELECT          0xA4u
+#define INS_GET_RESPONSE    0xC0u
+#define INS_VERIFY          0x20u
+#define INS_READ_BINARY     0xB0u
+#define INS_UPDATE_BINARY   0xD6u
+#define INS_GET_DATA        0xCAu
+#define INS_CHANGE_REF_DATA 0x24u
+#define INS_CREATE_FILE     0xE0u
+#define INS_DELETE_FILE     0xE4u
 /* ISO/IEC 7816-9. Note the values are NOT adjacent and are easy to swap:
  * ACTIVATE is 44 and DEACTIVATE is 04. Getting them the wrong way round would
  * turn "take this file out of service" into "put it back". */
@@ -61,6 +62,10 @@ uint16_t scos_cmd_delete_file(scos_kernel *k, const apdu_command *cmd,
                               apdu_response *rsp);
 uint16_t scos_cmd_read_binary(scos_kernel *k, const apdu_command *cmd,
                               apdu_response *rsp);
+uint16_t scos_cmd_verify(scos_kernel *k, const apdu_command *cmd,
+                         apdu_response *rsp);
+uint16_t scos_cmd_change_ref_data(scos_kernel *k, const apdu_command *cmd,
+                                  apdu_response *rsp);
 uint16_t scos_cmd_activate_file(scos_kernel *k, const apdu_command *cmd,
                                 apdu_response *rsp);
 uint16_t scos_cmd_deactivate_file(scos_kernel *k, const apdu_command *cmd,
