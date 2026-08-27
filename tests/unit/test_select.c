@@ -84,13 +84,18 @@ TEST(select_mf_the_first_test)
     /* 00 A4 00 00 02 3F 00
      * CLA=00 interindustry, INS=A4 SELECT, P1=00 by file identifier,
      * P2=00 first occurrence / return FCI, Lc=02, data=3F00 (the Master File).
-     * Expect 90 00. */
+     *
+     * Case 3: no Le, so under T=0 the card cannot return the FCI on this
+     * command at all. It answers 61XX -- "I have XX bytes" -- and the reader
+     * collects them with GET RESPONSE. Until M2b this returned 9000 with no
+     * data, which was well-formed and silently useless.
+     *
+     * 61XX is a SUCCESS status, so the selection must have moved. Asserting
+     * that here is what caught the bug where it had not. */
     const uint8_t cmd[]    = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00 };
     uint16_t      data_len = 0xFFFFu;
-    CHECK_HEX(send(cmd, sizeof(cmd), &data_len), SW_OK);
-    /* Case 3 (no Le): the card cannot return data, so SW only. The FCI arrives
-     * when Le is present -- see select_returns_fci_when_le_present. */
-    CHECK_EQ(data_len, 0);
+    CHECK_HEX(send(cmd, sizeof(cmd), &data_len), SW_MORE_DATA(0x0C));
+    CHECK_EQ(data_len, 0); /* 61XX carries no data of its own */
     CHECK_HEX(selected_fid(), 0x3F00);
     CHECK(!has_current_ef());
 }
@@ -100,8 +105,9 @@ TEST(select_mf_with_absent_data_field)
     fresh();
     /* ISO permits an absent data field with P1=00, meaning "select the MF".
      * Case 1 (header only) and Case 2 (with Le) must both work. */
+    /* Case 1 has no Le either, so it too announces rather than returns. */
     const uint8_t case1[] = { 0x00, 0xA4, 0x00, 0x00 };
-    CHECK_HEX(send(case1, sizeof(case1), NULL), SW_OK);
+    CHECK_HEX(send(case1, sizeof(case1), NULL), SW_MORE_DATA(0x0C));
     CHECK_HEX(selected_fid(), 0x3F00);
 
     fresh();
@@ -144,7 +150,7 @@ TEST(failed_select_preserves_previous_selection)
      * failed lookup would let an attacker drop the security context with a
      * junk APDU. */
     const uint8_t good[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x00 };
-    CHECK_HEX(send(good, sizeof(good), NULL), SW_OK);
+    CHECK_HEX(send(good, sizeof(good), NULL), SW_MORE_DATA(0x13));
     CHECK_HEX(selected_fid(), 0x2F00);
     CHECK(has_current_ef());
 
@@ -219,10 +225,11 @@ TEST(not_yet_implemented_ins_is_6d00)
      *
      *   B0 / D6  -> M2a, covered by test_fs.c
      *   E0 / E4  -> M2b, covered by test_create.c
+     *   C0       -> M2b, covered by test_get_response.c
      *
-     * Still absent: VERIFY (M3), GET DATA, and GET RESPONSE (M2b, open).
+     * Still absent: VERIFY (M3) and GET DATA.
      */
-    const uint8_t ins[] = { 0x20, 0xCA, 0xC0 };
+    const uint8_t ins[] = { 0x20, 0xCA };
     for (unsigned i = 0; i < sizeof(ins); i++) {
         const uint8_t cmd[] = { 0x00, ins[i], 0x00, 0x00 };
         CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_INS_NOT_SUPPORTED);
@@ -237,7 +244,7 @@ TEST(implemented_ins_is_never_6d00)
      * answers 6D00, and a list of what is ABSENT cannot detect that.
      */
     fresh();
-    const uint8_t ins[] = { 0xA4, 0xB0, 0xD6, 0xE0, 0xE4 };
+    const uint8_t ins[] = { 0xA4, 0xB0, 0xD6, 0xE0, 0xE4, 0xC0 };
     for (unsigned i = 0; i < sizeof(ins); i++) {
         const uint8_t  cmd[] = { 0x00, ins[i], 0x00, 0x00 };
         const uint16_t sw    = send(cmd, sizeof(cmd), NULL);
@@ -324,7 +331,7 @@ TEST(reset_clears_selection_but_counts_up)
 {
     fresh();
     const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x00 };
-    CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_OK);
+    CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_MORE_DATA(0x13));
     CHECK(has_current_ef());
 
     scos_reset(&g_card);
@@ -339,8 +346,9 @@ TEST(reset_clears_selection_but_counts_up)
     scos_reset(&g_card);
     CHECK_EQ(g_card.reset_count, 2);
 
-    /* The card still works after a reset. */
-    CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_OK);
+    /* The card still works after a reset. Still a Case 3 SELECT, so still
+     * 61XX -- the point of the check is that it answers at all. */
+    CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_MORE_DATA(0x13));
 }
 
 TEST(terminated_card_answers_6985)

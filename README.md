@@ -15,7 +15,8 @@ replaced by a real secure MCU without rewriting the OS.
 > **What works.** A HAL with a bounded surface, two HAL implementations (a
 > native simulator and a real ARM Cortex-M3 target), an ISO 7816-4 APDU parser
 > and dispatcher, a persistent filesystem (MF/DF/transparent EF), SELECT,
-> READ/UPDATE BINARY, CREATE/DELETE FILE, a BER-TLV parser, and a boot loader
+> READ/UPDATE BINARY, CREATE/DELETE FILE, GET RESPONSE/61XX, a BER-TLV parser,
+> and a boot loader
 > in mask ROM that programs a blank chip over the card interface. The same
 > Python suite runs against x86 and against real ARM machine code on QEMU.
 >

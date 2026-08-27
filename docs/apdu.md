@@ -138,3 +138,55 @@ From `src/apdu/apdu_parse.c`, applied without exception:
 and asserts the parser accepts exactly the two legal lengths and that the data
 field always lies inside the input. Run under ASan, that sweep is also an
 out-of-bounds hunt.
+
+## GET RESPONSE and 61XX
+
+`GET RESPONSE` is not a feature. It is a workaround for T=0, and knowing that
+is the difference between implementing it and cargo-culting it.
+
+T=0 is half-duplex and byte-oriented: the reader must state in advance how many
+bytes it will accept. So a **Case 3** command -- header plus data, no Le -- has
+no channel on which to return anything. If `SELECT` wants to hand back a file's
+control information and the reader never sent an Le, the bytes simply cannot go
+anywhere.
+
+ISO/IEC 7816-4's answer is a two-step:
+
+```
+-> 00 A4 00 00 02 3F 00          Case 3 SELECT, no Le
+<- 61 0C                         "I have 12 bytes for you"
+-> 00 C0 00 00 0C                GET RESPONSE, Le = 12
+<- 6F 0A 82 01 38 83 02 3F 00 8A 01 05   90 00
+```
+
+With an Le present the card just returns the data, and no `61XX` is involved:
+
+```
+-> 00 A4 00 00 02 3F 00 00       Case 4, Le = 0 meaning 256
+<- 6F 0A 82 01 38 ... 90 00
+```
+
+T=1 has no such limitation, which is why a T=1-only card can omit the command
+entirely.
+
+### The rules that matter
+
+| Situation | Answer | Why |
+|---|---|---|
+| Nothing pending | `6985` | The instruction *is* supported; the **sequence** is wrong. `6D00` would tell a reader to stop trying it for good. |
+| Any other command ran first | data discarded, then `6985` | ISO requires GET RESPONSE to immediately follow its `61XX`. A card that kept the data would let a later command collect an earlier one's output. |
+| A malformed frame arrived | data **kept** | It never reached a handler, so no command intervened. Dropping it would make GET RESPONSE unusable on a noisy link. |
+| Le smaller than pending | that many bytes + a fresh `61XX` | The reader may collect in chunks. |
+| Le larger than pending | `6CXX`, nothing consumed | Names the exact length so the retry succeeds first time. Returning fewer bytes with `9000` would silently change the length contract. |
+| Card reset | data discarded | A reset clears all volatile state. |
+
+### `61XX` is a success status
+
+Worth stating on its own, because getting it wrong is easy and the symptom is
+subtle. `61XX` means **the command executed** and its output is waiting.
+`6CXX` means the command did **not** execute. So a `SELECT` answering `61XX`
+must commit its selection, and one answering `6CXX` must not.
+
+Conflating the two was a real bug here: a Case 3 `SELECT` staged its FCI,
+returned `61XX`, and left the previous selection in place -- so the card
+described one file and would have read another.

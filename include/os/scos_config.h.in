@@ -36,4 +36,18 @@
 /* Largest short-form response: 256 data bytes + SW1 SW2. */
 #define SCOS_APDU_RSP_MAX 258u
 
+/*
+ * Response data waiting to be collected by GET RESPONSE.
+ *
+ * 256 because that is the most a short-form Le can ask for, and because SW2 of
+ * a 61XX carries the remaining count in one byte -- 00 meaning 256. A larger
+ * buffer could not be announced.
+ *
+ * Extended APDUs will need a bigger one, and that is exactly the point at
+ * which the RAM budget starts to bite: 65535 bytes does not fit in 8 KB, so
+ * extended-length support will have to chain rather than buffer. Better to
+ * meet that constraint here than to discover it on the chip.
+ */
+#define SCOS_PENDING_MAX 256u
+
 #endif /* SCOS_CONFIG_H */

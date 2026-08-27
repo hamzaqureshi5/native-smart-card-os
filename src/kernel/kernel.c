@@ -61,6 +61,52 @@ void scos_reset(scos_kernel *k)
     k->lifecycle = SCOS_LC_OPERATIONAL;
 }
 
+/* ------------------------------------------------- pending response data -- */
+
+void scos_pending_clear(scos_kernel *k)
+{
+    if (k == NULL) {
+        return;
+    }
+    /* Zeroed, not merely marked empty. The buffer can hold file contents, and
+     * from M5 it can hold key-derived material; leaving it in RAM after it has
+     * been collected costs nothing to avoid. */
+    os_memset(k->pending, 0, sizeof(k->pending));
+    k->pending_len = 0u;
+    k->pending_pos = 0u;
+}
+
+uint16_t scos_pending_remaining(const scos_kernel *k)
+{
+    if (k == NULL || k->pending_pos >= k->pending_len) {
+        return 0u;
+    }
+    return (uint16_t)(k->pending_len - k->pending_pos);
+}
+
+uint16_t scos_stage_response(scos_kernel *k, const uint8_t *data, uint16_t n)
+{
+    if (k == NULL || data == NULL) {
+        return SW_NO_PRECISE_DIAGNOSIS;
+    }
+    if (n == 0u || n > (uint16_t)SCOS_PENDING_MAX) {
+        /* A caller asking to stage nothing, or more than 61XX can announce, is
+         * an OS bug. Reporting it as a protocol error would blame the reader
+         * for something it did not do. */
+        return SW_NO_PRECISE_DIAGNOSIS;
+    }
+    scos_pending_clear(k);
+    if (!os_memcpy_checked(k->pending, (uint16_t)sizeof(k->pending), data, n)) {
+        return SW_NO_PRECISE_DIAGNOSIS;
+    }
+    k->pending_len = n;
+    k->pending_pos = 0u;
+
+    /* 61XX, where SW2 is the byte count and 00 means 256 -- so a full 256-byte
+     * response is announced as 6100, not 6200. */
+    return SW_MORE_DATA(n & 0xFFu);
+}
+
 scos_status scos_process(scos_kernel *k, const uint8_t *cmd, uint16_t cmd_len,
                          uint8_t *rsp, uint16_t rsp_cap, uint16_t *rsp_len)
 {
@@ -105,6 +151,24 @@ scos_status scos_process(scos_kernel *k, const uint8_t *cmd, uint16_t cmd_len,
     if (cst != APDU_CLA_OK) {
         *rsp_len = apdu_rsp_finish(&r, apdu_cla_status_sw(cst));
         return SCOS_OK;
+    }
+
+    /* --- 2b. drop any pending response --------------------------------- */
+    /*
+     * ISO/IEC 7816-4 requires GET RESPONSE to be the command IMMEDIATELY
+     * following the 61XX that announced the data. Enforced here, in one place,
+     * rather than in each handler -- a handler that forgot would leave an
+     * earlier command's output collectable by a later one, possibly across a
+     * change of selection or (from M3) of authentication state.
+     *
+     * Note this runs AFTER the parse and class checks, so a malformed frame or
+     * a wrong CLA does not destroy pending data. Those never reached a command
+     * handler, so from the reader's point of view no command intervened. A
+     * card that dropped the data on a line error would make GET RESPONSE
+     * unusable on a noisy link.
+     */
+    if (c.ins != INS_GET_RESPONSE) {
+        scos_pending_clear(k);
     }
 
     /* --- 3. dispatch --------------------------------------------------- */

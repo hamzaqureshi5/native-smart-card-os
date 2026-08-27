@@ -76,8 +76,8 @@ uint16_t scos_fs_error_to_sw(fs_status st)
 
 /* Append the selected file's control information, wrapped in the template the
  * caller asked for. */
-static uint16_t emit_fci(const apdu_command *cmd, apdu_response *rsp,
-                         uint16_t index, uint8_t ret_opt)
+static uint16_t emit_fci(scos_kernel *k, const apdu_command *cmd,
+                         apdu_response *rsp, uint16_t index, uint8_t ret_opt)
 {
     if (ret_opt == SEL_RET_NONE) {
         return SW_OK;
@@ -103,29 +103,53 @@ static uint16_t emit_fci(const apdu_command *cmd, apdu_response *rsp,
 
     const uint8_t template_tag = (ret_opt == SEL_RET_FCP) ? 0x62u : 0x6Fu;
 
+    /* Assemble the wrapped template once; where it goes depends on Le. */
+    uint8_t  wrapped[34];
+    uint16_t total = (uint16_t)(body_len + 2u); /* tag + length byte */
+    if (total > (uint16_t)sizeof(wrapped)) {
+        return SW_NO_PRECISE_DIAGNOSIS;
+    }
+    wrapped[0] = template_tag;
+    wrapped[1] = (uint8_t)body_len;
+    if (!os_memcpy_checked(&wrapped[2], (uint16_t)(sizeof(wrapped) - 2u), body,
+                           body_len)) {
+        return SW_NO_PRECISE_DIAGNOSIS;
+    }
+
     /*
      * Le handling.
      *
-     * With no Le (a Case 3 SELECT) the card cannot return data at all: under
-     * T=0 the reader is not expecting any. ISO's mechanism for that is to
-     * answer 61XX and let the reader fetch it with GET RESPONSE -- which is
-     * M2b. Until then a Case 3 SELECT succeeds with no data, which is
-     * well-defined and is what the M1 test expects.
+     * With no Le -- a Case 3 SELECT -- the card cannot return data on this
+     * command at all: under T=0 the reader is not expecting any and the
+     * protocol has no way to send it. So the template is staged and announced
+     * with 61XX, and the reader collects it with GET RESPONSE.
+     *
+     * This is the whole reason GET RESPONSE exists. Before it was implemented,
+     * a Case 3 SELECT answered 9000 with no data -- well-formed, and silently
+     * useless: a standards-conformant reader doing
+     *
+     *     00 A4 00 00 02 3F 00
+     *
+     * got success and no file information, with nothing to indicate the card
+     * had anything more to say.
      */
     if (!cmd->le_present) {
-        return SW_OK;
+        return scos_stage_response(k, wrapped, total);
     }
 
-    const uint16_t total = (uint16_t)(body_len + 2u); /* tag + length byte */
     if (cmd->le < total) {
         /* ISO: tell the caller the exact length it should have asked for.
-         * 6CXX is far more useful than truncating or refusing outright. */
+         * 6CXX is far more useful than truncating or refusing outright.
+         *
+         * Deliberately NOT staged for GET RESPONSE. The reader asked for a
+         * specific length and can simply ask again with the right one; leaving
+         * data pending would mean a 6CXX and a 61XX were interchangeable, and
+         * they are not -- one is "ask me again", the other is "come and get
+         * it". */
         return SW_WRONG_LE(total);
     }
 
-    if (!apdu_rsp_put_u8(rsp, template_tag) ||
-        !apdu_rsp_put_u8(rsp, (uint8_t)body_len) ||
-        !apdu_rsp_put(rsp, body, body_len)) {
+    if (!apdu_rsp_put(rsp, wrapped, total)) {
         return SW_NO_PRECISE_DIAGNOSIS;
     }
     return SW_OK;
@@ -234,11 +258,26 @@ uint16_t scos_cmd_select(scos_kernel *k, const apdu_command *cmd,
      * return 6CXX, and ISO treats that as a command that did not execute, so
      * the selection must not have moved. */
     const uint16_t index = fs_selected_index(&sel);
-    const uint16_t sw    = emit_fci(cmd, rsp, index, ret_opt);
-    if (sw != SW_OK) {
+    const uint16_t sw    = emit_fci(k, cmd, rsp, index, ret_opt);
+
+    /*
+     * 61XX IS A SUCCESS STATUS, and conflating it with an error here was a real
+     * bug: a Case 3 SELECT staged its FCI, returned 61XX, and never committed
+     * the selection -- so the card handed back file control information for a
+     * file it had not selected, and the reader's next READ BINARY would act on
+     * the previous selection.
+     *
+     * The distinction that matters is whether the command EXECUTED:
+     *   9000  executed, data returned
+     *   61XX  executed, data waiting for GET RESPONSE   -> commit
+     *   6CXX  did NOT execute, ask again with a real Le -> do not commit
+     *   other did not execute                           -> do not commit
+     */
+    const bool executed = (sw == SW_OK) || ((sw & 0xFF00u) == 0x6100u);
+    if (!executed) {
         return sw;
     }
 
     k->sel = sel; /* commit */
-    return SW_OK;
+    return sw;
 }

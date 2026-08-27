@@ -124,6 +124,7 @@ add_library(scos_core STATIC
   src/apdu/apdu_parse.c
   src/apdu/apdu_resp.c
   src/apdu/apdu_dispatch.c
+  src/apdu/cmd_get_response.c
   src/apdu/tlv.c
   src/filesystem/fs_store.c
   src/filesystem/fs.c

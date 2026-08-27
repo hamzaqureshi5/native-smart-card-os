@@ -174,7 +174,7 @@ TEST(corrupt_superblock_refuses_to_mount)
     /* And the OS must come up dead-but-answering rather than pretend. */
     CHECK_EQ(scos_init(&g_card), SCOS_ERR_STATE);
     CHECK_EQ(g_card.lifecycle, SCOS_LC_FS_ERROR);
-    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00 };
+    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x0C, 0x02, 0x3F, 0x00 };
     CHECK_HEX(send(sel, sizeof(sel), NULL, NULL), SW_MEMORY_FAILURE);
 }
 
@@ -506,7 +506,8 @@ TEST(select_returns_fci_when_le_present)
     uint8_t  data[64];
     uint16_t len = 0u;
 
-    /* Case 4: SELECT MF with Le. */
+    /* Case 4: SELECT MF with Le. P2=00 asks for the FCI, and because Le is
+     * present the card can return it directly -- no 61XX needed. */
     const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00, 0x20 };
     CHECK_HEX(send(cmd, sizeof(cmd), data, &len), SW_OK);
     CHECK(len > 0);
@@ -581,7 +582,7 @@ TEST(read_and_update_binary_roundtrip)
     uint16_t len = 0u;
 
     /* SELECT 2F00 */
-    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x00 };
+    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x0C, 0x02, 0x2F, 0x00 };
     CHECK_HEX(send(sel, sizeof(sel), NULL, NULL), SW_OK);
 
     /* UPDATE BINARY at offset 0 with 4 bytes (Case 3). */
@@ -611,7 +612,7 @@ TEST(read_binary_short_read_is_6282)
     uint8_t  data[300];
     uint16_t len = 0u;
 
-    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x00 };
+    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x0C, 0x02, 0x2F, 0x00 };
     CHECK_HEX(send(sel, sizeof(sel), NULL, NULL), SW_OK);
 
     /* 2F00 is 32 bytes; ask for 256 from offset 0. ISO: return what exists,
@@ -658,7 +659,7 @@ TEST(binary_sfi_form_selects_implicitly)
 TEST(binary_out_of_range_is_6b00)
 {
     fresh();
-    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x00 };
+    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x0C, 0x02, 0x2F, 0x00 };
     CHECK_HEX(send(sel, sizeof(sel), NULL, NULL), SW_OK);
 
     /* Offset 100 in a 32-byte file. */
@@ -673,7 +674,7 @@ TEST(binary_out_of_range_is_6b00)
 TEST(binary_malformed_apdus)
 {
     fresh();
-    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x00 };
+    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x0C, 0x02, 0x2F, 0x00 };
     CHECK_HEX(send(sel, sizeof(sel), NULL, NULL), SW_OK);
 
     /* READ BINARY with no Le: the card cannot know how much to send. */
@@ -697,7 +698,7 @@ TEST(binary_malformed_apdus)
 TEST(data_survives_reset_but_selection_does_not)
 {
     fresh();
-    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x00 };
+    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x0C, 0x02, 0x2F, 0x00 };
     CHECK_HEX(send(sel, sizeof(sel), NULL, NULL), SW_OK);
     const uint8_t upd[] = { 0x00, 0xD6, 0x00, 0x00, 0x02, 0x5A, 0xA5 };
     CHECK_HEX(send(upd, sizeof(upd), NULL, NULL), SW_OK);
@@ -723,7 +724,7 @@ TEST(data_survives_reset_but_selection_does_not)
 TEST(binary_never_escapes_under_a_p1p2_sweep)
 {
     fresh();
-    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x00 };
+    const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x0C, 0x02, 0x2F, 0x00 };
     CHECK_HEX(send(sel, sizeof(sel), NULL, NULL), SW_OK);
 
     unsigned answered = 0u;

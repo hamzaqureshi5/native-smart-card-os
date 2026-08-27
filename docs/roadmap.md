@@ -64,8 +64,41 @@ and fuzz targets rather than being tacked onto a working milestone.
   in `test_create.c` so it cannot regress silently.
 * `ACTIVATE FILE` / `DEACTIVATE FILE` (44 / 04) :: TODO -- a file can be
   *created* deactivated today, but not moved between states afterwards.
-* `GET RESPONSE` (C0) and `61XX`, so a Case 3 SELECT can return its FCI :: TODO
-* extended APDUs -- parsing, buffers, and the 65535-byte bounds :: TODO
+* **`GET RESPONSE` (C0) and `61XX`** :: DONE -- `src/apdu/cmd_get_response.c`.
+  This was not a checklist item: before it, a Case 3 SELECT answered `9000`
+  with **no data**, so a conformant reader sending the project's own canonical
+  first APDU
+  ```
+  00 A4 00 00 02 3F 00
+  ```
+  got success and no file information, with nothing to indicate the card had
+  more to say. It now answers `610C` and the reader collects the FCI.
+
+  The mechanism is a 256-byte staging buffer in `scos_kernel`, cleared by ANY
+  command other than GET RESPONSE -- enforced once in `scos_process()` rather
+  than per handler. ISO requires GET RESPONSE to immediately follow its `61XX`,
+  and the reason is security, not tidiness: a card that kept the data would let
+  a later unrelated command collect an earlier one's output, from M3 possibly
+  across a change of authentication state.
+
+  One deliberate exception: a frame that fails the structural parse or the
+  class check does NOT clear it. Those never reached a handler, so from the
+  reader's point of view no command intervened -- and a card that dropped
+  pending data on line noise would make GET RESPONSE unusable on a noisy link,
+  where retransmission is the reader's only recourse.
+
+  **Bug found while wiring it up**, worth recording because it is the kind that
+  survives review: `61XX` is a SUCCESS status, and `scos_cmd_select` treated
+  any non-`9000` as failure. So a Case 3 SELECT staged its FCI, answered
+  `61XX`, and never committed the selection -- the card handed back control
+  information for a file it had not selected, and the reader's next READ BINARY
+  would have acted on the previous one. Caught by an existing M1 test asserting
+  the selection had moved.
+* extended APDUs -- parsing, buffers, and the 65535-byte bounds :: TODO.
+  Note the constraint already visible: `SCOS_PENDING_MAX` is 256 because that
+  is the most `61XX` can announce and the most a short Le can request. 65535
+  bytes does not fit in an 8 KB RAM budget, so extended-length support will
+  have to chain rather than buffer. Better to meet that here than on the chip.
 * EF.ATR (`2F01`) :: TODO
 
 ---

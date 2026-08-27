@@ -40,7 +40,15 @@ EF_B = 0x6F02          # 16 bytes, SFI 2
 
 
 def sel(fid: int) -> str:
-    return f"00A4000002{fid:04X}"
+    """SELECT by identifier, P2=0C -- "no response data".
+
+    These tests navigate; they do not inspect file control information. P2=00
+    would ask for the FCI, and a Case 3 SELECT cannot return it under T=0 --
+    the card answers 61XX and the reader fetches it with GET RESPONSE. That
+    path is covered by test_get_response.py; asserting it here would make every
+    navigation step a two-command dance for no added coverage.
+    """
+    return f"00A4000C02{fid:04X}"
 
 
 def read(offset: int, length: int) -> str:
@@ -90,27 +98,27 @@ class TestNavigation(FsTestCase):
 
     def test_select_parent(self):
         self.assertSW(self.card.send_apdu(sel(DF_APP)), SW_OK)
-        self.assertSW(self.card.send_apdu("00A40300"), SW_OK)   # P1=03
+        self.assertSW(self.card.send_apdu("00A4030C"), SW_OK)   # P1=03
         self.assertSW(self.card.send_apdu(sel(EF_UNDER_MF)), SW_OK)
         # The MF has no parent.
         self.assertSW(self.card.send_apdu(sel(MF)), SW_OK)
-        self.assertSW(self.card.send_apdu("00A40300"), SW_FILE_NOT_FOUND)
+        self.assertSW(self.card.send_apdu("00A4030C"), SW_FILE_NOT_FOUND)
 
     def test_select_by_path_from_mf(self):
         # P1=08: 7F10 / 6F02
-        self.assertSW(self.card.send_apdu("00A40800047F106F02"), SW_OK)
+        self.assertSW(self.card.send_apdu("00A4080C047F106F02"), SW_OK)
         r = self.card.send_apdu(read(0, 4))
         self.assertSW(r, SW_OK)
         self.assertEqual(len(r.data), 4)
 
     def test_typed_child_selection(self):
         # P1=01 wants a DF, P1=02 wants an EF.
-        self.assertSW(self.card.send_apdu(f"00A401 0002{DF_APP:04X}".replace(" ", "")), SW_OK)
+        self.assertSW(self.card.send_apdu(f"00A401 0C02{DF_APP:04X}".replace(" ", "")), SW_OK)
         # Asking for a child DF but naming an EF must fail loudly.
         self.assertSW(
-            self.card.send_apdu(f"00A4010002{EF_A:04X}"), SW_INCOMPATIBLE_FILE
+            self.card.send_apdu(f"00A4010C02{EF_A:04X}"), SW_INCOMPATIBLE_FILE
         )
-        self.assertSW(self.card.send_apdu(f"00A4020002{EF_A:04X}"), SW_OK)
+        self.assertSW(self.card.send_apdu(f"00A4020C02{EF_A:04X}"), SW_OK)
 
     def test_fci_template(self):
         # Case 4 SELECT returns file control information.
@@ -315,7 +323,7 @@ class TestRobustness(FsTestCase):
 
     def test_malformed_paths(self):
         # Odd-length path: not a whole number of 2-byte identifiers.
-        self.assertSW(self.card.send_apdu("00A4080003 7F1000".replace(" ", "")),
+        self.assertSW(self.card.send_apdu("00A4080C03 7F1000".replace(" ", "")),
                       0x6A80)
         # Empty path.
         self.assertSW(self.card.send_apdu("00A40800"), 0x6A87)
