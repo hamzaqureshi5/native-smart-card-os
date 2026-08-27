@@ -206,6 +206,21 @@ With `--state-dir`, the virtual chip's memory is written to
 power-up. The OS never sees a file: it goes through `hal_nvm_*`, so the same code
 runs against real NVM later.
 
+## Formatting
+
+The tree is clang-format clean. The style config is `.clang-format`; run the
+checker before committing and CI can never surprise you:
+
+```sh
+pip install --user clang-format==23.1.0   # the version CI pins
+./tools/check-format.sh                   # check
+./tools/check-format.sh --fix             # reformat in place
+```
+
+The version is pinned because clang-format's output changes between releases.
+A different one will mostly work and will mostly also produce a few spurious
+diffs; if yours disagrees with CI, that is why.
+
 ## Build options
 
 | Option | Default | Purpose |

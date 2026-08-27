@@ -6,6 +6,7 @@
 #            tripwire. This is where memory bugs are caught.
 #   arm      the same OS as real Cortex-M3 machine code, booted through the
 #            boot ROM on QEMU. This is where the memory map is enforced.
+#   format   clang-format, at a PINNED version.
 #   samsung  the OS linked against the do-nothing Samsung stub. It proves the
 #            HAL surface is genuinely bounded -- if the core ever grows a
 #            dependency on something the stub does not provide, this fails to
@@ -25,6 +26,25 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Runs first and fastest, so a formatting slip is reported in seconds rather
+  # than after the QEMU job. It cannot fail for any reason except formatting.
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # PINNED, via pip rather than apt. clang-format's output changes between
+      # releases, so taking whatever the runner's distro ships means the check
+      # starts failing whenever Ubuntu moves on -- for reasons that have
+      # nothing to do with the code. The version here must match the one in
+      # tools/check-format.sh.
+      - name: Install clang-format 23.1.0
+        run: pip install clang-format==23.1.0
+
+      - name: Check formatting
+        run: ./tools/check-format.sh
+
   native:
     name: native + sanitizers
     runs-on: ubuntu-latest

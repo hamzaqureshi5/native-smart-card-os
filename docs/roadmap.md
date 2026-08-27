@@ -122,7 +122,7 @@ images wait on M5; a one-way fuse needs real silicon. Tracked in
 * per-file access conditions enforced in the command path
 * tests: correct/incorrect PIN, decrement, exhaustion, blocked, reset behaviour,
   brute force, unauthorized file access, and **power-cut-after-failed-verify**
-
+* License should be verified in order to use OS ... create a static license key initially later we will make it proper dynamic license key.
 Depends on M4 for that last one to be fully honest.
 
 ---
