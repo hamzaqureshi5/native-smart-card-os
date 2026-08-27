@@ -30,6 +30,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *d, size_t n) { return scos_fuzz_apdu(d
 | `command` | the full dispatcher on a live card | SW1 is always `6x` or `9x`; the MF descriptor in slot 0 is never damaged |
 | `fs_image` | `fs_init()` over a corrupted descriptor region | mounts or reports corruption; never auto-repairs, never faults |
 | `boot` | the boot loader, as a *sequence* of commands | **an ACTIVE slot can never be a lie** |
+| `fcp` | CREATE FILE / DELETE FILE, biased toward templates that parse | **no two EFs' data ranges overlap**; no orphans, no duplicate FID or SFI within a parent |
 
 ## Running them
 
@@ -46,6 +47,36 @@ spec plus every off-by-one around `Lc`/`Le`, the extended-length marker, and
 the ISO padding bytes — and then generates. The corpus runs first so a
 regression in a known case fails immediately rather than after ten thousand
 random inputs.
+
+## Why `fcp` exists when `command` already emits INS E0
+
+`fuzz_command` does send CREATE FILE -- `0xE0` and `0xE4` are in its
+instruction list. But its data fields are random bytes, and random bytes
+essentially never form a valid BER-TLV FCP template, so it hammers the parser's
+reject paths and almost never reaches `fs_create_file()` at all.
+
+That gap would have gone unnoticed if "the fuzzer covers CREATE FILE" had been
+left as an assumption. It was checked instead: instrumenting a run showed
+**279,207 successful CREATE FILEs out of 1,052,357 commands, a 27% success
+rate** for `fcp`. If `build_create()` is ever changed, re-measure -- a template
+generator that quietly stops producing valid templates turns the target into a
+slower copy of `fuzz_command`.
+
+What `fcp` asserts is not status words but **tree invariants**, because a bug in
+a mutating command does not produce a wrong answer. It produces a card whose
+structure is quietly wrong and stays wrong across every later power-on. The one
+that matters most:
+
+> No two elementary files' data ranges overlap.
+
+An allocator bug there means writing file A silently corrupts file B, and
+nothing in the APDU interface would ever report it. The target also drives
+UPDATE BINARY between creates, so the invariant is not merely bookkeeping --
+if two EFs did overlap, the writes would prove it.
+
+It runs at 3000 iterations in CI rather than 20000: re-personalising a card per
+input and re-walking all 32 descriptors after every command is O(n^2), which is
+the point, and it is an order of magnitude slower than the others.
 
 ## Why the `boot` target is shaped differently
 

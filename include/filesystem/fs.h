@@ -63,6 +63,62 @@ fs_status fs_find_by_sfi(uint16_t df, uint8_t sfi, uint16_t *out_index);
 /* Number of direct children of a DF. Used to refuse deleting a non-empty DF. */
 uint16_t fs_child_count(uint16_t parent);
 
+/* ---------------------------------------------------------- create/delete -- */
+/*
+ * NO ACCESS CONTROL IS ENFORCED ON EITHER OF THESE YET.
+ *
+ * On a real card CREATE FILE and DELETE FILE are administrative commands
+ * gated behind authentication -- a PIN, or more usually a secure channel to a
+ * security domain. Here anyone holding the reader can create and delete files.
+ * That is the same hole as the boot loader's, one layer up, and it is tracked
+ * as "Unauthorized file access" in docs/threat-model.md against M3. Do not
+ * read the checks below as a security boundary; they are structural integrity
+ * checks, which is a different thing.
+ */
+
+/*
+ * Create a file as a child of the current DF.
+ *
+ * Structural rules, all of them refusals rather than repairs:
+ *   - the identifier must not already exist among the current DF's children
+ *     (ISO leaves duplicate FIDs undefined; we refuse, because a tree with two
+ *     3F01s under one DF makes every later lookup ambiguous)
+ *   - 3F00 is reserved for the MF and cannot be created
+ *   - FFFF is reserved by ISO as "no file" and cannot be created
+ *   - an EF needs a non-zero size within FS_MAX_EF_SIZE; a DF must declare none
+ *   - an SFI, if given, must be 1..30 and unused among the DF's children
+ *
+ * The selection is NOT changed. ISO/IEC 7816-9 permits a card to select a
+ * newly created file; we do not, because a command that silently moves the
+ * selection is the kind of thing that turns a later UPDATE BINARY into a write
+ * to the wrong file.
+ */
+fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
+                         uint16_t *out_index);
+
+/*
+ * Delete a child of the current DF, by identifier.
+ *
+ *   - the MF can never be deleted; a card with no root is a brick
+ *   - a DF with children is refused (FS_ERR_NOT_USABLE) rather than deleted
+ *     recursively. A recursive delete cannot be rolled back until the
+ *     transaction journal exists (M4), so a power cut half way through would
+ *     leave orphaned descriptors pointing at a parent slot that has been
+ *     reused. Refusing is the honest behaviour until then.
+ *   - only a direct child of the current DF, never a global search, for the
+ *     same isolation reason fs_select_by_fid has no global search
+ *
+ * KNOWN LIMITATION: the EF's data bytes are NOT reclaimed. fs_store's data
+ * area is a bump allocator, so deleting a file frees its descriptor slot but
+ * leaks its data space. Compaction needs a way to move data atomically, which
+ * needs M4. fs_store_data_free() therefore only ever decreases.
+ *
+ * If the deleted file was selected, `sel` is moved back to the containing DF --
+ * leaving a selection pointing at a freed slot would let the next command act
+ * on whatever is written there later.
+ */
+fs_status fs_delete_file(fs_selection *sel, uint16_t file_id);
+
 /* --------------------------------------------------------------- selection -- */
 
 /*
