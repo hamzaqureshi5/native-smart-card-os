@@ -116,6 +116,58 @@ only the transport inside `tests/python/scos/card.py` changes -- swap the
 subprocess pipe for `pyscard` against a PC/SC reader -- and every test written
 against it keeps working.
 
+### 5. On the ARM chip -- loading the OS into a blank part
+
+The two targets differ in a way worth being blunt about: **`smartcard-sim` has
+the OS compiled into it**, so there is nothing to load and no honest way to add
+one. Loading an OS means writing machine code into flash and jumping to it, and
+that story belongs to the ARM SCV1 target, where the flash, the addresses and
+the jump are all real.
+
+```sh
+cmake -S . -B build-arm -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-arm-scv1.cmake
+cmake --build build-arm -j
+```
+
+Two separate programs come out:
+
+| Artefact | Runs at | What it is |
+|---|---|---|
+| `build-arm/scv1-boot.bin` | `0x00000000`, 8 KB mask ROM | the boot loader |
+| `build-arm/smartcard-os.bin` | `0x00002000`, 55 KB flash | **the OS** — this is the file you load |
+
+A blank chip answers as the boot loader:
+
+```sh
+$ mkdir mycard && printf '.atr\n.quit\n' | ./tools/run-scv1.sh --state-dir mycard --boot
+State:   BLANK (no OS loaded)
+3B941100424F4F54                       <- historical bytes "BOOT"
+```
+
+Load an OS into it:
+
+```sh
+$ ./tools/load-os.sh mycard
+load-os.sh: load smartcard-os.bin -- ok, 111 responses, none refused
+  slot  : ACTIVE
+  image : 13612 bytes, CRC 79C5
+
+$ { echo .atr; echo .quit; } | ./tools/run-scv1.sh --state-dir mycard --boot
+SmartCard OS on SCV1 (ARM Cortex-M3)
+3B94110053434F53                       <- historical bytes "SCOS"
+```
+
+`load-os.sh` holds the BOOTSEL strap, checks every status word, and refuses to
+erase the card if the image does not look like SCV1 firmware. To see the raw
+APDUs instead, `tools/mkldr.py os build-arm/smartcard-os.bin -o os.ldr`.
+
+Power-cycle and it is still there. Full walkthrough, including why the ATR
+changes and why that is *not* an ISO requirement:
+[`docs/loading-the-os.md`](docs/loading-the-os.md).
+
+**The loader has no authentication.** Anyone who can reach a blank card can
+load and activate any image. See `T11` in `docs/threat-model.md`.
+
 ## Simulator options
 
 ```
@@ -227,6 +279,12 @@ docs/                 architecture, APDU, threat model, roadmap, ...
 Start with `docs/architecture.md`. `docs/apdu.md` is a tutorial on APDUs if the
 protocol is new to you. `docs/hardware-port.md` is the checklist for moving to
 real silicon. `docs/roadmap.md` says what is done and what is next.
+
+For the chip and the loading flow: `docs/chip-scv1.md` is the virtual chip's
+reference — memory map, boot flow, slot header, flash semantics — and
+`docs/loading-the-os.md` is the step-by-step walkthrough of programming a blank
+part. `docs/fuzzing.md` covers the fuzz targets and is honest about what they
+are not.
 
 ## On Samsung hardware
 

@@ -94,6 +94,23 @@ if(SCOS_SANITIZE)
     -fsanitize=address,undefined)
 endif()
 
+# ---------------------------------------------------------- shared leaf ------
+#
+# Code used by BOTH the OS and the boot loader. Kept in its own library so that
+# the boot loader does not have to link the OS to get a CRC routine -- the boot
+# loader must be able to run on a chip whose OS slot is empty, so it cannot
+# depend on the OS in any direction.
+
+add_library(scos_util STATIC
+  src/kernel/crc16.c
+)
+target_include_directories(scos_util PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(scos_util PRIVATE scos_warnings)
+target_link_libraries(scos_util PUBLIC scos_sanitizers)
+target_compile_options(scos_util PRIVATE -ffreestanding)
+
 # ------------------------------------------------------------- OS core -------
 #
 # libscos_core is THE portable OS. It links against no HAL implementation and
@@ -104,7 +121,6 @@ add_library(scos_core STATIC
   src/kernel/kernel.c
   src/kernel/card_loop.c
   src/kernel/os_mem.c
-  src/kernel/crc16.c
   src/apdu/apdu_parse.c
   src/apdu/apdu_resp.c
   src/apdu/apdu_dispatch.c
@@ -118,11 +134,30 @@ target_include_directories(scos_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(scos_core PRIVATE scos_warnings)
-target_link_libraries(scos_core PUBLIC scos_sanitizers)
+target_link_libraries(scos_core PUBLIC scos_sanitizers scos_util)
 
 # Freestanding discipline, enforced by the compiler rather than by review:
 # no builtin libc calls beyond the memory intrinsics the codegen may emit.
 target_compile_options(scos_core PRIVATE -ffreestanding)
+
+# --------------------------------------------------------- boot loader -------
+#
+# libscos_boot is the loader logic, and like the OS core it is pure: it takes
+# pointers to two byte regions and knows nothing about peripherals, files, or
+# real addresses. That is what lets the host build unit-test and fuzz the code
+# that will eventually sit in unpatchable mask ROM.
+
+add_library(scos_boot STATIC
+  src/boot/boot_hdr.c
+  src/boot/cflash.c
+  src/boot/boot_loader.c
+)
+target_include_directories(scos_boot PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(scos_boot PRIVATE scos_warnings)
+target_link_libraries(scos_boot PUBLIC scos_sanitizers scos_util)
+target_compile_options(scos_boot PRIVATE -ffreestanding)
 
 # --------------------------------------------------------- HAL selection -----
 
@@ -194,6 +229,39 @@ if(SCOS_HAL STREQUAL "arm-scv1")
   set_target_properties(smartcard-os.elf PROPERTIES
     LINK_DEPENDS "${SCV1_LINKER_SCRIPT}"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+  # ---------------------------------------------------------- boot ROM -----
+  #
+  # A SEPARATE program, linked at address 0. It shares the startup code, the
+  # semihosting shim and the UART transport with the OS -- those are properties
+  # of the chip, not of either program -- but links libscos_boot instead of
+  # libscos_core, so it cannot accidentally acquire a dependency on the OS it
+  # is supposed to be able to load.
+
+  set(SCV1_BOOT_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/src/hal/arm-scv1/scv1_boot.ld")
+
+  add_executable(scv1-boot.elf
+    src/hal/arm-scv1/boot_main.c
+    src/hal/arm-scv1/startup.c
+    src/hal/arm-scv1/semihost.c
+    src/hal/arm-scv1/hal_arm_io.c)
+  target_include_directories(scv1-boot.elf PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/hal/arm-scv1")
+  target_link_libraries(scv1-boot.elf PRIVATE scos_boot scos_warnings)
+  target_link_options(scv1-boot.elf PRIVATE
+    -T "${SCV1_BOOT_LINKER_SCRIPT}"
+    -Wl,-Map=${CMAKE_BINARY_DIR}/scv1-boot.map
+    -Wl,--cref
+    -lgcc)
+  set_target_properties(scv1-boot.elf PROPERTIES
+    LINK_DEPENDS "${SCV1_BOOT_LINKER_SCRIPT}"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+  add_custom_command(TARGET scv1-boot.elf POST_BUILD
+    COMMAND "${CMAKE_OBJCOPY}" -O binary
+            "$<TARGET_FILE:scv1-boot.elf>" "${CMAKE_BINARY_DIR}/scv1-boot.bin"
+    COMMAND "${CMAKE_SIZE_UTIL}" "$<TARGET_FILE:scv1-boot.elf>"
+    COMMENT "Building SCV1 boot ROM (scv1-boot.bin)")
 
   # The flash image. This is the artefact you would program into a chip.
   add_custom_command(TARGET smartcard-os.elf POST_BUILD

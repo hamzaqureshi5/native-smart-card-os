@@ -74,25 +74,36 @@ static void put_hex_byte(uint8_t b)
 /* --------------------------------------------------------------- ATR ----- */
 
 /*
- * Same ATR as the native simulator, and the same caveat: it is informational.
- * On real silicon the ATR is clocked out by the interface block before any OS
- * code runs, and its interface bytes must be derived from the actual clock and
- * guard times. Documented byte-by-byte in docs/simulator.md.
+ * The ATR is NOT defined here. It is supplied by whichever program is linked
+ * against this transport -- the OS defines one, the boot loader another.
+ *
+ * That indirection is the mechanism behind a question worth being precise
+ * about: does the ATR change when you load an OS? ISO/IEC 7816-3 does not
+ * require it to. What actually happens on this chip is that a blank part runs
+ * the boot loader, which answers with its own ATR, and a programmed part runs
+ * the OS, which answers with the OS's. The bytes differ because DIFFERENT
+ * CODE IS ANSWERING, not because loading an image rewrites an ATR somewhere.
+ *
+ * The rest of the caveat still stands: on real silicon the ATR is clocked out
+ * by the interface block before any application code runs, and its interface
+ * bytes must be derived from the actual clock and guard times. Documented
+ * byte-by-byte in docs/simulator.md.
  */
-static const uint8_t s_atr[] = { 0x3B, 0x94, 0x11, 0x00, 0x53, 0x43, 0x4F, 0x53 };
+extern const uint8_t  scv1_atr_bytes[];
+extern const uint32_t scv1_atr_len;
 
 const uint8_t *hal_card_atr(uint32_t *out_len)
 {
     if (out_len != NULL) {
-        *out_len = (uint32_t)sizeof(s_atr);
+        *out_len = scv1_atr_len;
     }
-    return s_atr;
+    return scv1_atr_bytes;
 }
 
 static void send_atr(void)
 {
-    for (uint32_t i = 0; i < (uint32_t)sizeof(s_atr); i++) {
-        put_hex_byte(s_atr[i]);
+    for (uint32_t i = 0; i < scv1_atr_len; i++) {
+        put_hex_byte(scv1_atr_bytes[i]);
     }
     uart_putc('\n');
 }

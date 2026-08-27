@@ -10,11 +10,19 @@
  * EEPROM and DFLASH are declared but NOTHING is placed in them: they hold
  * filesystem data at run time, not linker output. That keeps the flash image
  * the size of the code rather than the size of the chip.
+ *
+ * NOTE THE ORIGIN. The OS does NOT live at address 0 -- the boot ROM does.
+ * The OS is linked to run from OSFLASH at 0x00002000, which is where the boot
+ * loader programs it and where it points VTOR before jumping. Linking it at 0
+ * would produce an image whose absolute addresses were all 0x2000 too low; it
+ * would load, pass its CRC, and then fault on the first function call.
  */
 
 MEMORY
 {
-  CODE   (rx)  : ORIGIN = 0x00000000, LENGTH = 64K
+  /* OSFLASH -- see scv1.h. 0x00000000..0x00001FFF is BOOTROM and
+   * 0x0000FC00..0x0000FFFF is the OS slot header; neither belongs to us. */
+  CODE   (rx)  : ORIGIN = 0x00002000, LENGTH = 55K
   EEPROM (rw)  : ORIGIN = 0x00010000, LENGTH = 16K
   DFLASH (rw)  : ORIGIN = 0x00014000, LENGTH = 256K
   SRAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 16K
