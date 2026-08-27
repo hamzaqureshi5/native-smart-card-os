@@ -57,6 +57,7 @@
 
 #include "hal/hal.h"
 #include "os/crc16.h"
+#include "os/journal.h"
 #include "os/os_mem.h"
 
 #define FS_MAGIC_0 'S'
@@ -119,7 +120,7 @@ static fs_status sb_write(void)
     put_u16(&raw[12], 0u);
     put_u16(&raw[14], crc16(raw, 14u));
 
-    if (hal_nvm_write(HAL_NVM_EEPROM, FS_SB_OFFSET, raw, sizeof(raw)) !=
+    if (scos_nvm_write(HAL_NVM_EEPROM, FS_SB_OFFSET, raw, sizeof(raw)) !=
         HAL_OK) {
         return FS_ERR_NVM;
     }
@@ -206,7 +207,7 @@ fs_status fs_store_format(void)
     for (uint16_t i = 0; i < FS_MAX_FILES; i++) {
         const uint32_t off =
             (uint32_t)FS_DESC_BASE + ((uint32_t)i * FS_DESC_SIZE);
-        if (hal_nvm_write(HAL_NVM_EEPROM, off, free_desc, FS_DESC_SIZE) !=
+        if (scos_nvm_write(HAL_NVM_EEPROM, off, free_desc, FS_DESC_SIZE) !=
             HAL_OK) {
             return FS_ERR_NVM;
         }
@@ -354,7 +355,7 @@ fs_status fs_store_write_desc(uint16_t index, const fs_descriptor *desc)
 
     const uint32_t off =
         (uint32_t)FS_DESC_BASE + ((uint32_t)index * FS_DESC_SIZE);
-    if (hal_nvm_write(HAL_NVM_EEPROM, off, raw, FS_DESC_SIZE) != HAL_OK) {
+    if (scos_nvm_write(HAL_NVM_EEPROM, off, raw, FS_DESC_SIZE) != HAL_OK) {
         return FS_ERR_NVM;
     }
     if (hal_nvm_sync() != HAL_OK) {
@@ -376,7 +377,7 @@ fs_status fs_store_free_desc(uint16_t index)
 
     const uint32_t off =
         (uint32_t)FS_DESC_BASE + ((uint32_t)index * FS_DESC_SIZE);
-    if (hal_nvm_write(HAL_NVM_EEPROM, off, raw, FS_DESC_SIZE) != HAL_OK) {
+    if (scos_nvm_write(HAL_NVM_EEPROM, off, raw, FS_DESC_SIZE) != HAL_OK) {
         return FS_ERR_NVM;
     }
     if (hal_nvm_sync() != HAL_OK) {
@@ -455,7 +456,7 @@ fs_status fs_store_write_data(uint32_t offset, uint16_t len, const void *src)
     if (!s_sb.mounted) {
         return FS_ERR_NOT_FORMATTED;
     }
-    if (hal_nvm_write(HAL_NVM_FLASH, offset, src, len) != HAL_OK) {
+    if (scos_nvm_write(HAL_NVM_FLASH, offset, src, len) != HAL_OK) {
         return FS_ERR_RANGE;
     }
     if (hal_nvm_sync() != HAL_OK) {

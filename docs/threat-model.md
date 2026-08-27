@@ -220,9 +220,19 @@ in the hands of the person attacking it.
 * **Component:** NVM, filesystem, transactions
 * **Attack:** Cut power during a write. Leave a file half-updated, a PIN counter
   un-decremented (infinite guesses), or filesystem metadata inconsistent.
-* **Mitigation:** **NOT YET IMPLEMENTED.** Milestone 4. Today
-  `hal_nvm_write()` is an atomic `memcpy` -- the *optimistic* case -- so
-  **nothing in this project may currently claim tear-resistance.**
+* **Mitigation:** **PARTIAL.** M4's undo journal is in place: every command
+  runs as a transaction, and recovery at boot rolls back anything that did not
+  commit. Interrupting `CREATE FILE` or `UPDATE BINARY` at any byte offset
+  leaves the card byte-identical across the whole EEPROM.
+
+  The PIN counter is deliberately **outside** the journal, so a failed
+  `VERIFY` still costs a try -- see T14. Had it been journaled at command
+  scope, the abort path would have handed the attempt back and undone M3.
+
+  **Not yet:** the interruption tests are host-only (fault injection is in the
+  simulator HAL), and the simulator's power-failure model is stricter than real
+  silicon. The claim is "resists power interruption at command granularity on
+  the host", not "tear-resistant".
   Groundwork in place: `hal_nvm_sync()` exists as an explicit durability
   barrier, so the OS is written against a device that buffers writes; and the
   EEPROM/FLASH split with distinct page sizes is modelled, because a retry

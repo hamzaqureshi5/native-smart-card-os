@@ -43,7 +43,7 @@ add_test(NAME test_boot_loader COMMAND test_boot_loader)
 # These need NVM, so a HAL is linked in. The simulator HAL with state_dir=NULL
 # is an in-RAM hermetic store -- a test double that is also the real code path.
 if(SCOS_HAL STREQUAL "simulator")
-  foreach(t test_hal_sim test_select test_fs test_create test_get_response test_lifecycle test_pin)
+  foreach(t test_hal_sim test_select test_fs test_create test_get_response test_lifecycle test_pin test_journal)
     add_executable(${t} unit/${t}.c)
     target_link_libraries(${t} PRIVATE scos_core scos_hal scos_warnings)
     target_include_directories(${t} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit")

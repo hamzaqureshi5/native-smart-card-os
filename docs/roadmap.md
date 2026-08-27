@@ -580,23 +580,141 @@ Depends on M4 for that last one to be fully honest.
 
 ---
 
-## M4 -- Transactions and power failure
+## M4 -- Transactions and power failure :: IN PROGRESS
 
 The highest-risk milestone, and the one that distinguishes a card OS from an
-embedded database.
+embedded database. A card has no shutdown: it is a chip in someone's pocket
+that a reader energises for a few hundred milliseconds at a time, and the field
+can drop mid-command, mid-write, mid-page. There is no "please wait, saving".
 
-* `POWER_FAILURE` in the simulator: **skips the durability flush** and can stop
-  part way through a write, unlike `POWER_OFF`
-* fault-injection hook in `hal_nvm_write()`: stop after N bytes, mark power lost
-* journal in EEPROM: BEGIN / UPDATE / COMMIT / ABORT
-* recovery at boot: roll forward a committed transaction, roll back an
-  incomplete one
-* transaction depth and size limits, and correct behaviour at them
-* tests: commit, abort, interrupted write at **every byte offset**, corrupted
-  journal metadata, corrupted records, and rollback of a failed multi-write
-  command
+* **fault injection in `hal_nvm_write()`** :: DONE --
+  `vcard_fault_after_bytes(n)` makes the next write store `n` bytes and then
+  report `HAL_ERR_POWER`. The bytes before the cut are **real and stay in the
+  array**, because that is what a half-programmed page looks like: the OS has
+  to recover from partial data, not from an untouched region.
 
-Until this lands, **no tear-resistance claim in this project is justified.**
+  This is what makes the milestone's claims measurable rather than asserted.
+  Without it an interruption test can only check offset 0 and offset N, which
+  is close to checking nothing. The arming is one-shot and disarms on
+  consumption, so an arming aimed at one write cannot silently apply to the
+  next and make the test that armed it pass for the wrong reason.
+
+  `vcard_power_failure()` is also added, distinct from `vcard_power_off()`: it
+  **skips the durability flush**, so unflushed writes are lost.
+
+* **the journal** :: DONE -- `include/os/journal.h`, `src/kernel/journal.c`.
+
+  **UNDO, not redo,** and the choice matters on this hardware. Redo logs the
+  new bytes then applies them; undo logs the *old* bytes then writes in place.
+  Undo wins twice here: commit becomes a **single byte** (the data is already
+  in place, so committing is just marking the journal closed -- and in
+  byte-writable EEPROM that is atomic), and the extra cost falls on the common
+  path as one write of the old bytes rather than on every transaction as two
+  writes of the new ones. With redo, commit is followed by a second pass that
+  can itself be interrupted.
+
+  **The state byte is outside the CRC, for the third time in this project.**
+  The boot loader's slot state and the PIN's retry tally are too, and the
+  reason is the same load-bearing idea: a field that must change *without*
+  rewriting its container cannot live inside the container's checksum. If
+  commit had to update the CRC as well, commit would be three bytes and two
+  writes -- and a power cut between them leaves a journal whose CRC says
+  "corrupt", whose only safe reading is "roll back", which would undo a
+  transaction that had in fact committed.
+
+  So the states clear bits only: `0xFF` EMPTY -> `0xF0` OPEN -> `0x00`
+  COMMITTED. Monotonic, so a partial write moves the journal forward and never
+  backward, and anything that is not exactly `0x00` reads as "did not commit".
+  The naive encoding OPEN=1/COMMITTED=2 would let a half-written 2 read as 0, 1
+  or 3, and two of those are wrong in the dangerous direction.
+
+  **The one invariant above all others:** save the old bytes *durably*, then
+  write the new ones. Everything else follows from it -- including that a card
+  which lost power while writing the journal itself has not yet modified
+  anything, which is why a corrupt journal is **discarded, not replayed**. A
+  partial rollback would restore some bytes of a multi-write and leave others,
+  producing a state that is neither the old one nor the new one.
+
+* **the command is the unit of atomicity** :: DONE -- `scos_process()` wraps
+  every command in a transaction and commits or rolls back on the way out,
+  decided by ISO's own categorisation of SW1: `90`/`61` success, `62`/`63`
+  warning-but-executed, everything else error.
+
+  Wrapped once, centrally, rather than inside each `fs_*` function. A handler
+  cannot forget to open a transaction it never opens -- and per-function
+  transactions would make nesting inevitable the first time one command called
+  two of them.
+
+  **`scos_nvm_write()` is transparent**: with a transaction open it journals,
+  without one it passes through. An explicit "now log this" API is one a caller
+  can forget, and a forgotten log is invisible until a power cut in the field.
+
+* **NO NESTING**, and it is a decision rather than a simplification. Nesting
+  needs either savepoints -- a second mechanism with its own recovery rules --
+  or reference counting, where an inner commit does nothing and the outer one
+  decides. The second is cheap and has a trap: an inner operation that
+  "committed" has not, so a caller that checked the return value and moved on
+  is wrong. `begin()` inside an open transaction is an error the caller must
+  handle.
+
+* **size limit** :: a transaction whose undo data exceeds the 2 KB journal is
+  **REFUSED** -- the write does not happen. Succeeding unprotected is the one
+  outcome worse than failing: the caller gets `9000` for an operation a power
+  cut can now corrupt, and nothing records that this write was uncovered.
+
+### The interaction that could have undone M3
+
+Every command now runs in a transaction, and a failed `VERIFY` returns `63CX`
+or `6983`. **If the PIN retry counter were journaled at command scope, the
+abort path would hand the attempt back** -- and a 4-digit PIN would fall in ten
+thousand tries again. M3's entire counter design would have been defeated by a
+mechanism added later for an unrelated reason.
+
+It does not happen because `commit_tally()` writes with `hal_nvm_write()`
+directly, bypassing the journal. That bypass existed to keep the decrement to
+one atomic byte and is now load-bearing for two reasons. Note that the
+`62`/`63` rule above is not a substitute: a journaled counter would survive
+`63CX` but **not** `6983`, which is worse than either, because the last attempt
+would be the one restored. `test_journal.c` pins this so a future change to
+either mechanism cannot break the other silently.
+
+### What is proven, and what is not
+
+`tests/unit/test_journal.c`, 557 checks. The headline tests interrupt CREATE
+FILE and UPDATE BINARY at **every byte offset** and assert that the card comes
+back byte-identical across the whole EEPROM -- comparing the entire region
+rather than the fields the test author thought of, because a consistency bug in
+a field nobody remembered is the one that survives review.
+
+Mutation-checked rather than trusted: disabling the rollback fails 16 checks,
+reversing its order fails 4 (including the overlapping-writes case), and
+removing the final data write fails 5.
+
+**Still not proven, and stated so the suite is not read as more than it is:**
+
+* The simulator's `power_failure` discards the whole session's unflushed
+  writes, where a real chip loses only the write in flight. That makes this
+  model **stricter** than the hardware -- the safe direction for a test, but a
+  pass here is not a substitute for silicon.
+* The interruption tests are **host-only**. Fault injection lives in the
+  simulator HAL, so the ARM target runs the same OS code but cannot cut a write
+  mid-flight. An ARM equivalent needs the fault hook in `hal_arm_nvm.c`.
+* A fault that *sets* a bit in the journal state byte or the PIN tally is not
+  defended against; both resist power interruption and say nothing about active
+  fault injection.
+
+### Remaining in M4
+
+* `fs_store` data-area compaction, so `DELETE FILE` stops leaking the bytes of
+  the EF it deletes -- this needs atomic data movement, which is now possible
+* recursive `DELETE FILE` of a non-empty DF, refused since M2b for the same
+  reason
+* fault injection in the ARM HAL, so the interruption tests run on the chip
+* a Python-visible `.fault` transport control, so power-failure tests can span
+  sessions
+
+Until those land, the honest claim is **"resists power interruption at command
+granularity on the host"** -- not "tear-resistant".
 
 ---
 

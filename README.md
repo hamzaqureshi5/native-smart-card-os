@@ -31,8 +31,14 @@ replaced by a real secure MCU without rewriting the OS.
 > * **No authentication anywhere.** The boot loader will load and activate any
 >   image from anyone, and CREATE/DELETE FILE are ungated. See `T11` and
 >   "Unauthorized file access" in [`docs/threat-model.md`](docs/threat-model.md).
-> * **No tear resistance.** Until the transaction journal exists (M4), no claim
->   about surviving a power cut mid-write is justified.
+> * **Partial tear resistance.** M4's undo journal is in: every command is a
+>   transaction, and interrupting `CREATE FILE` or `UPDATE BINARY` at any byte
+>   offset leaves the card byte-identical. But the interruption tests are
+>   **host-only** -- fault injection lives in the simulator HAL, so the ARM
+>   target runs the same code and cannot cut a write mid-flight -- and the
+>   simulator's power-failure model is stricter than real silicon. The honest
+>   claim is "resists power interruption at command granularity on the host",
+>   not "tear-resistant".
 
 ## Quick start
 

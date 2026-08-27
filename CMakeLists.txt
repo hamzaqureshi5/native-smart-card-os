@@ -180,6 +180,7 @@ add_library(scos_core STATIC
   src/kernel/kernel.c
   src/kernel/card_loop.c
   src/kernel/os_mem.c
+  src/kernel/journal.c
   src/apdu/apdu_parse.c
   src/apdu/apdu_resp.c
   src/apdu/apdu_dispatch.c

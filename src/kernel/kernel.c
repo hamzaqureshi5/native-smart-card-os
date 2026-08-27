@@ -3,6 +3,7 @@
  * kernel.c -- Command execution and the card's main loop.
  */
 #include "os/kernel.h"
+#include "os/journal.h"
 #include "security/pin.h"
 
 #include "apdu/apdu.h"
@@ -28,6 +29,26 @@ scos_status scos_init(scos_kernel *k)
      * attacker who can corrupt a single byte a reliable way to wipe the card.
      * Coming up dead and saying so is the safe failure.
      */
+    /*
+     * RECOVERY FIRST, before anything reads a filesystem structure.
+     *
+     * If power went mid-transaction, the descriptor table and the superblock
+     * may disagree with each other right now. Mounting first would mean
+     * fs_init() validating a state that recovery is about to change -- and, in
+     * the worst case, deciding the card is corrupt and refusing to come up,
+     * when the card was recoverable all along.
+     *
+     * A recovery failure is reported the same way a filesystem failure is: the
+     * card comes up answering 6581 and does NOT silently proceed. A card that
+     * could not undo an interrupted transaction has data of unknown
+     * consistency, and the one thing it must not do is behave as though it
+     * does not.
+     */
+    if (scos_txn_recover() != SCOS_TXN_OK) {
+        k->lifecycle = SCOS_LC_FS_ERROR;
+        return SCOS_ERR_STATE;
+    }
+
     const fs_status fst = fs_init();
     if (fst != FS_OK) {
         k->lifecycle = SCOS_LC_FS_ERROR;
@@ -195,7 +216,67 @@ scos_status scos_process(scos_kernel *k, const uint8_t *cmd, uint16_t cmd_len,
      * checks security before structure can be probed with malformed APDUs; a
      * card that reports "INS not supported" before validating CLA leaks which
      * instructions exist in classes it does not serve. */
+    /*
+     * THE COMMAND IS THE UNIT OF ATOMICITY.
+     *
+     * Every command runs inside a transaction, so a command that writes several
+     * NVM structures either writes all of them or none. CREATE FILE is the
+     * clearest case: it writes a descriptor AND updates the superblock's
+     * allocation pointer, and a card that lost power between them would come
+     * back with a file pointing at bytes belonging to nobody and every later
+     * allocation wrong.
+     *
+     * Wrapped HERE, once, rather than inside each fs_* function. A handler
+     * cannot forget to open a transaction it never opens, and the alternative
+     * -- per-function transactions -- also makes nesting inevitable the first
+     * time one command calls two of them.
+     *
+     * A failure to begin is NOT ignored. Running the command unprotected
+     * because the journal was unavailable would give a caller success for an
+     * operation a power cut can now corrupt, which is the outcome this whole
+     * milestone exists to prevent.
+     */
+    const bool txn = (scos_txn_begin() == SCOS_TXN_OK);
+    if (!txn) {
+        *rsp_len = apdu_rsp_finish(&r, SW_MEMORY_FAILURE);
+        return SCOS_OK;
+    }
+
     const uint16_t sw = scos_dispatch(k, &c, &r);
+
+    /*
+     * Commit or roll back, decided by ISO's own categorisation of SW1 rather
+     * than by a per-handler flag that a handler could set wrongly:
+     *
+     *   90, 61      success
+     *   62, 63      WARNING -- the command executed. 6282 "end of file" and
+     *               63CX "tries remaining" both describe work that happened,
+     *               and rolling either back would be wrong: 63CX in particular
+     *               would restore a spent PIN attempt.
+     *   everything  error. Nothing should have been written, and if something
+     *   else        was -- a multi-write that failed half way -- this is what
+     *               undoes it.
+     *
+     * The PIN retry counter is deliberately OUTSIDE this: commit_tally() in
+     * src/security/pin.c writes with hal_nvm_write() directly, bypassing the
+     * journal. That was originally about keeping the decrement to a single
+     * atomic byte, and it is now load-bearing for a second reason -- a failed
+     * VERIFY returns 63CX or 6983, and if the counter were journaled at
+     * command scope the abort path would hand the attempt back. That is
+     * exactly the attack M3 was built to stop, reintroduced by an unrelated
+     * mechanism. The 62/63 rule above means a journaled counter would survive
+     * 63CX but NOT 6983, which is worse than either: the last attempt would be
+     * the one restored.
+     */
+    const uint8_t sw1 = (uint8_t)(sw >> 8);
+    const bool    executed =
+        (sw1 == 0x90u) || (sw1 == 0x61u) || (sw1 == 0x62u) || (sw1 == 0x63u);
+
+    if (executed) {
+        (void)scos_txn_commit();
+    } else {
+        (void)scos_txn_abort();
+    }
 
     *rsp_len = apdu_rsp_finish(&r, sw);
     return SCOS_OK;

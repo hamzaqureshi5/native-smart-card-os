@@ -213,6 +213,79 @@ void vcard_power_off(void)
     s_power = VCARD_POWER_OFF;
 }
 
+void vcard_power_failure(void)
+{
+    /*
+     * The card leaving the field mid-operation. NOT vcard_power_off().
+     *
+     * The difference is the flush. power_off writes the NVM arrays to the state
+     * directory, because a real chip's completed writes are already in its
+     * array -- that models an orderly end of session and every write the OS
+     * thought it made is present, so it cannot test tear resistance at all.
+     *
+     * Here the flush is SKIPPED. Anything the OS wrote is lost unless it had
+     * already been persisted, which on this simulator means the write happened
+     * before an earlier power_off. A card that survives power_off and corrupts
+     * under power_failure is the normal result of getting transactions wrong,
+     * which is exactly why both exist.
+     *
+     * Note the asymmetry with real hardware, stated so nobody mistakes the
+     * model for the thing: on a real chip a completed page program is durable
+     * the instant it completes, and only the IN-FLIGHT write is at risk. Here
+     * the whole session's writes are at risk unless flushed. That makes this
+     * simulation STRICTER than the hardware, which is the safe direction for a
+     * test but means a failure here is not automatically a failure on silicon.
+     * The per-write case is what vcard_fault_after_bytes() models.
+     */
+    s_power = VCARD_POWER_OFF;
+}
+
+/* --------------------------------------------------- fault injection ----- */
+/*
+ * One-shot, and one-shot on purpose: a test arms the write it wants to
+ * interrupt, rather than arming and disarming around it. The second pattern is
+ * the one that leaves a fault armed for the next test and produces a failure
+ * three tests later with no obvious cause.
+ */
+static bool     s_fault_armed = false;
+static uint32_t s_fault_after = 0u;
+static bool     s_fault_fired = false;
+
+void vcard_fault_after_bytes(uint32_t n)
+{
+    s_fault_armed = true;
+    s_fault_after = n;
+    s_fault_fired = false;
+}
+
+void vcard_fault_clear(void)
+{
+    s_fault_armed = false;
+    s_fault_after = 0u;
+    s_fault_fired = false;
+}
+
+bool vcard_fault_fired(void)
+{ return s_fault_fired; }
+
+bool vcard_fault_pending(uint32_t *out_after)
+{
+    if (!s_fault_armed) {
+        return false;
+    }
+    if (out_after != NULL) {
+        *out_after = s_fault_after;
+    }
+    /* Disarm on consumption, whether or not the cut actually lands inside this
+     * write. Otherwise an arming aimed at one write silently applies to the
+     * next, and the test that armed it passes for the wrong reason. */
+    s_fault_armed = false;
+    return true;
+}
+
+void vcard_fault_mark_fired(void)
+{ s_fault_fired = true; }
+
 vcard_power vcard_power_get(void)
 { return s_power; }
 

@@ -49,8 +49,57 @@ void vcard_configure(const vcard_config *cfg);
 /* Defaults, for callers that want to override one field. */
 void vcard_config_default(vcard_config *cfg);
 
-hal_status  vcard_power_on(void);  /* load NVM, init peripherals */
-void        vcard_power_off(void); /* flush NVM durably          */
+hal_status vcard_power_on(void);  /* load NVM, init peripherals */
+void       vcard_power_off(void); /* flush NVM durably          */
+
+/*
+ * POWER FAILURE, as distinct from power off.
+ *
+ * vcard_power_off() is the reader pulling the card out cleanly: the NVM is
+ * flushed durably first, because a real chip's writes have already completed.
+ * That models an orderly end of session and it CANNOT test tear resistance --
+ * every write the OS thought it made is present.
+ *
+ * vcard_power_failure() models the card leaving the field mid-operation: the
+ * durability flush is SKIPPED, so anything the OS wrote without a following
+ * hal_nvm_sync() is lost. A card that appeared to survive power_off and
+ * corrupts under power_failure is the normal outcome of getting transactions
+ * wrong, which is why both exist.
+ */
+void vcard_power_failure(void);
+
+/*
+ * Fault injection: make the NEXT hal_nvm_write() stop after `n` bytes and
+ * report that power was lost.
+ *
+ * This is the whole reason M4's claims are testable rather than asserted. A
+ * transaction that survives an interruption at byte 0 and at byte N tells you
+ * very little; one that survives interruption at EVERY byte offset of a
+ * multi-byte write is a different kind of statement, and reaching each of those
+ * instants needs the write itself to stop there on command.
+ *
+ * `n` counts bytes actually stored before the abort, so 0 means "fail before
+ * writing anything" and a value >= the write length means "do not fail".
+ * Cleared automatically once it has fired, so a test arms it per write rather
+ * than remembering to disarm.
+ *
+ * SIMULATOR ONLY, and deliberately not in include/hal/hal.h: the OS must have
+ * no way to ask whether it is being fault-injected, or a future version of it
+ * could behave differently under test than in the field.
+ */
+void vcard_fault_after_bytes(uint32_t n);
+void vcard_fault_clear(void);
+
+/* True if a fault fired since the last clear. Lets a test assert that the
+ * interruption it asked for actually happened, rather than passing because
+ * nothing went wrong for a different reason. */
+bool vcard_fault_fired(void);
+
+/* Internal, for hal_sim_nvm.c. Consumes the arming: returns true once and
+ * disarms, so an arming aimed at one write cannot silently apply to the next
+ * and make the test that armed it pass for the wrong reason. */
+bool        vcard_fault_pending(uint32_t *out_after);
+void        vcard_fault_mark_fired(void);
 vcard_power vcard_power_get(void);
 
 /* Print the startup banner (RAM/ROM/EEPROM/FLASH/ATR) to stderr. On stderr,
