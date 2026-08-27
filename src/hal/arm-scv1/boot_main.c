@@ -30,7 +30,8 @@
  * sends anything. The interface bytes are identical -- the link parameters are
  * a property of the chip, not of the software answering.
  */
-const uint8_t  scv1_atr_bytes[] = { 0x3B, 0x94, 0x11, 0x00, 0x42, 0x4F, 0x4F, 0x54 };
+const uint8_t  scv1_atr_bytes[] = { 0x3B, 0x94, 0x11, 0x00,
+                                    0x42, 0x4F, 0x4F, 0x54 };
 const uint32_t scv1_atr_len     = (uint32_t)sizeof(scv1_atr_bytes);
 
 /* Real chip regions. Pointers rather than arrays: this memory is not ours to
@@ -95,8 +96,9 @@ static bool bootsel_asserted(void)
 static void slot_power_on(void)
 {
     if (semihost_available()) {
-        const long a = semihost_load(OSFLASH_FILE, g_osflash, SCV1_OSFLASH_SIZE);
-        const long b = semihost_load(OSHDR_FILE,   g_oshdr,   SCV1_OSHDR_SIZE);
+        const long a =
+            semihost_load(OSFLASH_FILE, g_osflash, SCV1_OSFLASH_SIZE);
+        const long b = semihost_load(OSHDR_FILE, g_oshdr, SCV1_OSHDR_SIZE);
         if (a > 0 && b > 0) {
             return; /* a previously programmed card */
         }
@@ -105,8 +107,12 @@ static void slot_power_on(void)
      * in. QEMU hands us zeroed RAM, which is NOT what blank flash looks like,
      * and a slot full of 0x00 would read as a header with a bad CRC rather
      * than as a blank card. */
-    for (uint32_t i = 0; i < SCV1_OSFLASH_SIZE; i++) { g_osflash[i] = 0xFFu; }
-    for (uint32_t i = 0; i < SCV1_OSHDR_SIZE;   i++) { g_oshdr[i]   = 0xFFu; }
+    for (uint32_t i = 0; i < SCV1_OSFLASH_SIZE; i++) {
+        g_osflash[i] = 0xFFu;
+    }
+    for (uint32_t i = 0; i < SCV1_OSHDR_SIZE; i++) {
+        g_oshdr[i] = 0xFFu;
+    }
 }
 
 static void slot_flush(void)
@@ -115,7 +121,7 @@ static void slot_flush(void)
         return;
     }
     (void)semihost_store(OSFLASH_FILE, g_osflash, SCV1_OSFLASH_SIZE);
-    (void)semihost_store(OSHDR_FILE,   g_oshdr,   SCV1_OSHDR_SIZE);
+    (void)semihost_store(OSHDR_FILE, g_oshdr, SCV1_OSHDR_SIZE);
     g_dirty = false;
 }
 
@@ -146,13 +152,12 @@ __attribute__((noreturn)) static void boot_jump(uint32_t base)
 
     SCV1_SCB_VTOR = base;
     __asm__ volatile("dsb\nisb" ::: "memory");
-    __asm__ volatile(
-        "msr msp, %0\n"
-        "bx  %1\n"
-        :
-        : "r"(sp), "r"(pc)
-        : "memory");
-    for (;;) { }
+    __asm__ volatile("msr msp, %0\n"
+                     "bx  %1\n"
+                     :
+                     : "r"(sp), "r"(pc)
+                     : "memory");
+    for (;;) {}
 }
 
 /* ------------------------------------------------------------- reporting -- */
@@ -160,7 +165,7 @@ __attribute__((noreturn)) static void boot_jump(uint32_t base)
 static void put_hex8(uint8_t b)
 {
     static const char d[] = "0123456789ABCDEF";
-    char s[3];
+    char              s[3];
     s[0] = d[(b >> 4) & 0x0Fu];
     s[1] = d[b & 0x0Fu];
     s[2] = '\0';
@@ -171,11 +176,19 @@ static void put_u32(uint32_t v)
 {
     char buf[11];
     int  n = 0;
-    if (v == 0u) { scv1_uart_puts("0"); return; }
-    while (v > 0u && n < 10) { buf[n++] = (char)('0' + (int)(v % 10u)); v /= 10u; }
+    if (v == 0u) {
+        scv1_uart_puts("0");
+        return;
+    }
+    while (v > 0u && n < 10) {
+        buf[n++] = (char)('0' + (int)(v % 10u));
+        v /= 10u;
+    }
     char out[12];
     int  m = 0;
-    while (n > 0) { out[m++] = buf[--n]; }
+    while (n > 0) {
+        out[m++] = buf[--n];
+    }
     out[m] = '\0';
     scv1_uart_puts(out);
 }
@@ -183,11 +196,16 @@ static void put_u32(uint32_t v)
 static const char *slot_name(boot_slot_state st)
 {
     switch (st) {
-    case BOOT_SLOT_BLANK:   return "BLANK (no OS loaded)";
-    case BOOT_SLOT_LOADED:  return "LOADED (not activated)";
-    case BOOT_SLOT_ACTIVE:  return "ACTIVE";
-    case BOOT_SLOT_DAMAGED: return "DAMAGED (header or image failed CRC)";
-    default:                return "?";
+    case BOOT_SLOT_BLANK:
+        return "BLANK (no OS loaded)";
+    case BOOT_SLOT_LOADED:
+        return "LOADED (not activated)";
+    case BOOT_SLOT_ACTIVE:
+        return "ACTIVE";
+    case BOOT_SLOT_DAMAGED:
+        return "DAMAGED (header or image failed CRC)";
+    default:
+        return "?";
     }
 }
 
@@ -220,14 +238,15 @@ static void banner(boot_slot_state st, const boot_hdr *h, bool strap)
 /* ------------------------------------------------------------------ main -- */
 
 /* Response buffer. The loader's largest response is 16 bytes; +2 for SW. */
-static uint8_t  s_rsp[BOOT_STATUS_RSP_LEN + 2u];
-static uint8_t  s_cmd[5u + BOOT_BLOCK_SIZE];
+static uint8_t s_rsp[BOOT_STATUS_RSP_LEN + 2u];
+static uint8_t s_cmd[5u + BOOT_BLOCK_SIZE];
 
 static void loader_loop(void)
 {
     for (;;) {
-        uint32_t         n  = 0u;
-        const hal_status hs = hal_card_receive(s_cmd, (uint32_t)sizeof(s_cmd), &n);
+        uint32_t         n = 0u;
+        const hal_status hs =
+            hal_card_receive(s_cmd, (uint32_t)sizeof(s_cmd), &n);
 
         if (hs == HAL_ERR_LINK_DOWN) {
             slot_flush();
@@ -239,9 +258,8 @@ static void loader_loop(void)
             slot_flush();
             boot_hdr h = { 0u, 0u, 0u, 0u };
             if (!bootsel_asserted() &&
-                boot_slot_check(g_oshdr, SCV1_OSHDR_SIZE,
-                                g_osflash, SCV1_OSFLASH_SIZE, &h)
-                == BOOT_SLOT_ACTIVE) {
+                boot_slot_check(g_oshdr, SCV1_OSHDR_SIZE, g_osflash,
+                                SCV1_OSFLASH_SIZE, &h) == BOOT_SLOT_ACTIVE) {
                 boot_jump(SCV1_OSFLASH_BASE);
             }
             g_ctx.erased     = false;
@@ -254,9 +272,8 @@ static void loader_loop(void)
 
         boot_action    act    = BOOT_ACT_NONE;
         uint32_t       rsplen = 0u;
-        const uint16_t sw     = boot_handle(&g_ctx, s_cmd, n,
-                                            s_rsp, BOOT_STATUS_RSP_LEN,
-                                            &rsplen, &act);
+        const uint16_t sw     = boot_handle(&g_ctx, s_cmd, n, s_rsp,
+                                            BOOT_STATUS_RSP_LEN, &rsplen, &act);
         if (sw == 0x9000u) {
             g_dirty = true; /* conservative: any success may have written */
         }
@@ -278,9 +295,9 @@ int main(void)
 
     slot_power_on();
 
-    boot_hdr h = { 0u, 0u, 0u, 0u };
-    const boot_slot_state st = boot_slot_check(g_oshdr, SCV1_OSHDR_SIZE,
-                                               g_osflash, SCV1_OSFLASH_SIZE, &h);
+    boot_hdr              h  = { 0u, 0u, 0u, 0u };
+    const boot_slot_state st = boot_slot_check(
+        g_oshdr, SCV1_OSHDR_SIZE, g_osflash, SCV1_OSFLASH_SIZE, &h);
     const bool strap = bootsel_asserted();
 
     /*
@@ -299,13 +316,15 @@ int main(void)
 
     banner(st, &h, strap);
 
-    boot_ctx_init(&g_ctx, g_osflash, SCV1_OSFLASH_SIZE,
-                  g_oshdr, SCV1_OSHDR_SIZE, SCV1_CFLASH_PAGE,
-                  SCV1_OSFLASH_BASE, SCV1_SRAM_BASE, SCV1_SRAM_SIZE);
+    boot_ctx_init(&g_ctx, g_osflash, SCV1_OSFLASH_SIZE, g_oshdr,
+                  SCV1_OSHDR_SIZE, SCV1_CFLASH_PAGE, SCV1_OSFLASH_BASE,
+                  SCV1_SRAM_BASE, SCV1_SRAM_SIZE);
 
     loader_loop();
 
     scv1_uart_puts("boot loader: link closed\r\n");
     semihost_exit(0);
-    for (;;) { __asm__ volatile("wfi"); }
+    for (;;) {
+        __asm__ volatile("wfi");
+    }
 }

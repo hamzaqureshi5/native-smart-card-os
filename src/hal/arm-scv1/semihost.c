@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 #include "semihost.h"
 
-#define SYS_OPEN   0x01
-#define SYS_CLOSE  0x02
-#define SYS_WRITE  0x05
-#define SYS_READ   0x06
-#define SYS_SEEK   0x0A
-#define SYS_EXIT   0x18
+#define SYS_OPEN  0x01
+#define SYS_CLOSE 0x02
+#define SYS_WRITE 0x05
+#define SYS_READ  0x06
+#define SYS_SEEK  0x0A
+#define SYS_EXIT  0x18
 
 /* Semihosting call: operation in r0, parameter block pointer in r1, result in
  * r0. BKPT 0xAB is the agreed trap. */
@@ -25,19 +25,26 @@ static bool s_probed    = false;
  * the compiler is entitled to assume nothing changes it and hoist the read. */
 static volatile int s_probe_in_flight = 0;
 
-int  semihost_probe_in_flight(void) { return s_probe_in_flight; }
-void semihost_probe_faulted(void)   { s_probe_in_flight = 0; s_available = false; }
+int semihost_probe_in_flight(void)
+{ return s_probe_in_flight; }
+void semihost_probe_faulted(void)
+{
+    s_probe_in_flight = 0;
+    s_available       = false;
+}
 
 /* Open modes from the semihosting specification. */
-#define MODE_RB  0   /* "rb" */
-#define MODE_WB  4   /* "wb" */
+#define MODE_RB 0 /* "rb" */
+#define MODE_WB 4 /* "wb" */
 
 static long sh_open(const char *path, int mode)
 {
     /* The parameter block is (pointer, mode, length-of-path). */
     uint32_t block[3];
     uint32_t n = 0u;
-    while (path[n] != '\0') { n++; }
+    while (path[n] != '\0') {
+        n++;
+    }
     block[0] = (uint32_t)(uintptr_t)path;
     block[1] = (uint32_t)mode;
     block[2] = n;
@@ -64,7 +71,7 @@ void semihost_probe(void)
      * which we must NOT trust. So the flag, not the return value, decides.
      */
     s_probe_in_flight = 1;
-    s_available       = true;   /* provisional; the fault handler revokes it */
+    s_available       = true; /* provisional; the fault handler revokes it */
 
     const long fd = sh_open(":tt", MODE_RB);
 
@@ -85,7 +92,8 @@ void semihost_probe(void)
     }
 }
 
-bool semihost_available(void) { return s_available; }
+bool semihost_available(void)
+{ return s_available; }
 
 long semihost_load(const char *path, void *dst, uint32_t len)
 {
@@ -100,9 +108,9 @@ long semihost_load(const char *path, void *dst, uint32_t len)
     /* SYS_READ returns the number of bytes NOT read, which is the opposite of
      * every other read API and a reliable source of bugs. */
     uint32_t block[3];
-    block[0] = (uint32_t)fd;
-    block[1] = (uint32_t)(uintptr_t)dst;
-    block[2] = len;
+    block[0]            = (uint32_t)fd;
+    block[1]            = (uint32_t)(uintptr_t)dst;
+    block[2]            = len;
     const long not_read = sh_call(SYS_READ, block);
     (void)sh_close(fd);
 
@@ -125,9 +133,9 @@ int semihost_store(const char *path, const void *src, uint32_t len)
         return -1;
     }
     uint32_t block[3];
-    block[0] = (uint32_t)fd;
-    block[1] = (uint32_t)(uintptr_t)src;
-    block[2] = len;
+    block[0]               = (uint32_t)fd;
+    block[1]               = (uint32_t)(uintptr_t)src;
+    block[2]               = len;
     const long not_written = sh_call(SYS_WRITE, block);
     (void)sh_close(fd);
     return (not_written == 0) ? 0 : -1;

@@ -37,16 +37,16 @@
 
 /* Bounded on purpose. An unbounded table would mean unbounded NVM use and an
  * unbounded search, neither of which a card can afford. */
-#define FS_MAX_FILES        32u
-#define FS_DESC_SIZE        20u   /* serialised size in NVM, NOT sizeof()     */
-#define FS_SUPERBLOCK_SIZE  16u
-#define FS_MAX_EF_SIZE      32767u /* READ BINARY's offset field is 15 bits   */
-#define FS_MAX_DEPTH        8u    /* guards path walking against cycles       */
+#define FS_MAX_FILES       32u
+#define FS_DESC_SIZE       20u /* serialised size in NVM, NOT sizeof()     */
+#define FS_SUPERBLOCK_SIZE 16u
+#define FS_MAX_EF_SIZE     32767u /* READ BINARY's offset field is 15 bits   */
+#define FS_MAX_DEPTH       8u     /* guards path walking against cycles       */
 
-#define FS_FID_MF           0x3F00u
-#define FS_INVALID_INDEX    0xFFFFu
-#define FS_NO_PARENT        0xFFFFu
-#define FS_NO_SFI           0x00u
+#define FS_FID_MF        0x3F00u
+#define FS_INVALID_INDEX 0xFFFFu
+#define FS_NO_PARENT     0xFFFFu
+#define FS_NO_SFI        0x00u
 
 /* ------------------------------------------------------------ file types -- */
 /*
@@ -73,11 +73,11 @@ typedef enum {
  * mean a translation table and a chance to get it wrong.
  */
 typedef enum {
-    FS_LC_CREATION     = 0x01, /* being created; not yet usable              */
-    FS_LC_INITIALISED  = 0x03, /* structure exists, being personalised       */
-    FS_LC_ACTIVATED    = 0x05, /* operational: normal use                    */
-    FS_LC_DEACTIVATED  = 0x04, /* operational but blocked; reversible        */
-    FS_LC_TERMINATED   = 0x0C  /* dead. IRREVERSIBLE by design.              */
+    FS_LC_CREATION    = 0x01, /* being created; not yet usable              */
+    FS_LC_INITIALISED = 0x03, /* structure exists, being personalised       */
+    FS_LC_ACTIVATED   = 0x05, /* operational: normal use                    */
+    FS_LC_DEACTIVATED = 0x04, /* operational but blocked; reversible        */
+    FS_LC_TERMINATED  = 0x0C  /* dead. IRREVERSIBLE by design.              */
 } fs_lifecycle;
 
 /* ---------------------------------------------------------- the descriptor -- */
@@ -104,37 +104,31 @@ typedef struct {
 } fs_descriptor;
 
 static inline bool fs_is_df(const fs_descriptor *d)
-{
-    return d != NULL && (d->type == FS_TYPE_DF || d->type == FS_TYPE_MF);
-}
+{ return d != NULL && (d->type == FS_TYPE_DF || d->type == FS_TYPE_MF); }
 
 static inline bool fs_is_ef(const fs_descriptor *d)
-{
-    return d != NULL && d->type == FS_TYPE_EF_TRANSPARENT;
-}
+{ return d != NULL && d->type == FS_TYPE_EF_TRANSPARENT; }
 
 /* A file must be ACTIVATED to be used. Anything else is refused, which is what
  * makes deactivation a usable administrative control rather than advisory. */
 static inline bool fs_is_usable(const fs_descriptor *d)
-{
-    return d != NULL && d->lifecycle == FS_LC_ACTIVATED;
-}
+{ return d != NULL && d->lifecycle == FS_LC_ACTIVATED; }
 
 /* ---------------------------------------------------------------- status --- */
 
 typedef enum {
-    FS_OK = 0,
-    FS_ERR_PARAM       = -1,
-    FS_ERR_NOT_FOUND   = -2,
-    FS_ERR_CORRUPT     = -3,  /* CRC or structural check failed              */
-    FS_ERR_NO_SPACE    = -4,
-    FS_ERR_EXISTS      = -5,
-    FS_ERR_NOT_USABLE  = -6,  /* wrong lifecycle state                      */
-    FS_ERR_WRONG_TYPE  = -7,  /* e.g. READ BINARY on a DF                   */
-    FS_ERR_RANGE       = -8,  /* offset/length outside the file             */
-    FS_ERR_NVM         = -9,  /* the HAL refused                            */
+    FS_OK                = 0,
+    FS_ERR_PARAM         = -1,
+    FS_ERR_NOT_FOUND     = -2,
+    FS_ERR_CORRUPT       = -3, /* CRC or structural check failed              */
+    FS_ERR_NO_SPACE      = -4,
+    FS_ERR_EXISTS        = -5,
+    FS_ERR_NOT_USABLE    = -6, /* wrong lifecycle state                      */
+    FS_ERR_WRONG_TYPE    = -7, /* e.g. READ BINARY on a DF                   */
+    FS_ERR_RANGE         = -8, /* offset/length outside the file             */
+    FS_ERR_NVM           = -9, /* the HAL refused                            */
     FS_ERR_NOT_FORMATTED = -10,
-    FS_ERR_VERSION     = -11  /* on-NVM layout version we do not understand */
+    FS_ERR_VERSION       = -11 /* on-NVM layout version we do not understand */
 } fs_status;
 
 #endif /* SCOS_FS_TYPES_H */

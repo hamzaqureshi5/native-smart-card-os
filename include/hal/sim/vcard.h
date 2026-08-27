@@ -23,10 +23,7 @@
 /* Virtual power state. POWER_FAILURE (Milestone 4) will differ from POWER_OFF
  * by skipping the durability flush, so that an interrupted write stays
  * interrupted across a restart. */
-typedef enum {
-    VCARD_POWER_OFF = 0,
-    VCARD_POWER_ON
-} vcard_power;
+typedef enum { VCARD_POWER_OFF = 0, VCARD_POWER_ON } vcard_power;
 
 typedef struct {
     /* Directory holding card_eeprom.bin / card_flash.bin. If NULL, the virtual
@@ -52,8 +49,8 @@ void vcard_configure(const vcard_config *cfg);
 /* Defaults, for callers that want to override one field. */
 void vcard_config_default(vcard_config *cfg);
 
-hal_status vcard_power_on(void);   /* load NVM, init peripherals */
-void       vcard_power_off(void);  /* flush NVM durably          */
+hal_status  vcard_power_on(void);  /* load NVM, init peripherals */
+void        vcard_power_off(void); /* flush NVM durably          */
 vcard_power vcard_power_get(void);
 
 /* Print the startup banner (RAM/ROM/EEPROM/FLASH/ATR) to stderr. On stderr,

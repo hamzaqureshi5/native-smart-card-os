@@ -42,9 +42,15 @@
 
 static int hex_nibble(int ch)
 {
-    if (ch >= '0' && ch <= '9') { return ch - '0'; }
-    if (ch >= 'a' && ch <= 'f') { return ch - 'a' + 10; }
-    if (ch >= 'A' && ch <= 'F') { return ch - 'A' + 10; }
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return ch - 'A' + 10;
+    }
     return -1;
 }
 
@@ -53,8 +59,8 @@ static int hex_nibble(int ch)
  * overflow of the destination. */
 static long hex_decode(const char *in, uint8_t *out, uint32_t cap)
 {
-    uint32_t n    = 0u;
-    int      hi   = -1;
+    uint32_t n  = 0u;
+    int      hi = -1;
 
     for (const char *p = in; *p != '\0'; p++) {
         const char ch = *p;
@@ -72,7 +78,7 @@ static long hex_decode(const char *in, uint8_t *out, uint32_t cap)
                 return -1; /* would overflow: reject, never truncate */
             }
             out[n++] = (uint8_t)((hi << 4) | v);
-            hi = -1;
+            hi       = -1;
         }
     }
     if (hi >= 0) {
@@ -95,13 +101,13 @@ static void print_atr(void)
 static void print_help(void)
 {
     (void)fprintf(stderr,
-        "Send an APDU as hex, e.g.  00 A4 00 00 02 3F 00\n"
-        "Control lines:\n"
-        "  .atr     print the Answer To Reset\n"
-        "  .reset   warm reset (clears volatile state, keeps NVM)\n"
-        "  .quit    power down and exit\n"
-        "  .help    this text\n"
-        "  #...     comment\n");
+                  "Send an APDU as hex, e.g.  00 A4 00 00 02 3F 00\n"
+                  "Control lines:\n"
+                  "  .atr     print the Answer To Reset\n"
+                  "  .reset   warm reset (clears volatile state, keeps NVM)\n"
+                  "  .quit    power down and exit\n"
+                  "  .help    this text\n"
+                  "  #...     comment\n");
     (void)fflush(stderr);
 }
 
@@ -152,7 +158,7 @@ static void trim(char *s)
 {
     size_t n = strlen(s);
     while (n > 0u && (s[n - 1u] == '\n' || s[n - 1u] == '\r' ||
-                      s[n - 1u] == ' '  || s[n - 1u] == '\t')) {
+                      s[n - 1u] == ' ' || s[n - 1u] == '\t')) {
         s[--n] = '\0';
     }
 }
@@ -224,6 +230,4 @@ hal_status hal_card_send(const uint8_t *buf, uint32_t len)
 }
 
 const uint8_t *hal_card_atr(uint32_t *out_len)
-{
-    return vcard_atr(out_len);
-}
+{ return vcard_atr(out_len); }

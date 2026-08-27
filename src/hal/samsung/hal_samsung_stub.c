@@ -48,7 +48,7 @@
  * rail: `-DSCOS_HAL=samsung` alone will not produce a binary that pretends to
  * work on hardware. */
 #if !defined(SCOS_SAMSUNG_STUB_ACKNOWLEDGED)
-#  error "src/hal/samsung is an unimplemented placeholder, not a port. \
+#error "src/hal/samsung is an unimplemented placeholder, not a port. \
 Configure with -DSCOS_ACK_SAMSUNG_STUB=ON to build it anyway (it will fail \
 at run time), or use -DSCOS_HAL=simulator."
 #endif
@@ -59,50 +59,76 @@ at run time), or use -DSCOS_HAL=simulator."
  * HAL_ERR_IO: the distinction between "this platform does not provide it" and
  * "the hardware failed" matters when diagnosing a real board. */
 
-hal_status hal_init(void)  { return HAL_ERR_UNSUPPORTED; }
-void       hal_reset(void)    { }
-void       hal_shutdown(void) { }
-
-uint32_t hal_nvm_size(hal_nvm_region region)      { (void)region; return 0u; }
-uint32_t hal_nvm_page_size(hal_nvm_region region) { (void)region; return 0u; }
-
-hal_status hal_nvm_read(hal_nvm_region region, uint32_t offset,
-                        void *dst, uint32_t len)
+hal_status hal_init(void)
+{ return HAL_ERR_UNSUPPORTED; }
+void hal_reset(void)
 {
-    (void)region; (void)offset; (void)dst; (void)len;
+}
+void hal_shutdown(void)
+{
+}
+
+uint32_t hal_nvm_size(hal_nvm_region region)
+{
+    (void)region;
+    return 0u;
+}
+uint32_t hal_nvm_page_size(hal_nvm_region region)
+{
+    (void)region;
+    return 0u;
+}
+
+hal_status hal_nvm_read(hal_nvm_region region, uint32_t offset, void *dst,
+                        uint32_t len)
+{
+    (void)region;
+    (void)offset;
+    (void)dst;
+    (void)len;
     return HAL_ERR_UNSUPPORTED;
 }
 
 hal_status hal_nvm_write(hal_nvm_region region, uint32_t offset,
                          const void *src, uint32_t len)
 {
-    (void)region; (void)offset; (void)src; (void)len;
+    (void)region;
+    (void)offset;
+    (void)src;
+    (void)len;
     return HAL_ERR_UNSUPPORTED;
 }
 
-hal_status hal_nvm_sync(void) { return HAL_ERR_UNSUPPORTED; }
+hal_status hal_nvm_sync(void)
+{ return HAL_ERR_UNSUPPORTED; }
 
 hal_status hal_random_bytes(void *dst, size_t len)
 {
-    (void)dst; (void)len;
+    (void)dst;
+    (void)len;
     /* Note what this does NOT do: it does not fall back to a software PRNG.
      * A HAL that silently substitutes weak entropy for a missing TRNG is how
      * real products ship predictable keys. */
     return HAL_ERR_UNSUPPORTED;
 }
 
-uint32_t hal_timer_get_ms(void) { return 0u; }
+uint32_t hal_timer_get_ms(void)
+{ return 0u; }
 
 hal_status hal_card_receive(uint8_t *buf, uint32_t cap, uint32_t *out_len)
 {
-    (void)buf; (void)cap;
-    if (out_len != NULL) { *out_len = 0u; }
+    (void)buf;
+    (void)cap;
+    if (out_len != NULL) {
+        *out_len = 0u;
+    }
     return HAL_ERR_UNSUPPORTED;
 }
 
 hal_status hal_card_send(const uint8_t *buf, uint32_t len)
 {
-    (void)buf; (void)len;
+    (void)buf;
+    (void)len;
     return HAL_ERR_UNSUPPORTED;
 }
 
@@ -110,6 +136,8 @@ const uint8_t *hal_card_atr(uint32_t *out_len)
 {
     /* An ATR is chip- and configuration-specific. Inventing one here would be
      * a lie about hardware we have not seen. */
-    if (out_len != NULL) { *out_len = 0u; }
+    if (out_len != NULL) {
+        *out_len = 0u;
+    }
     return NULL;
 }

@@ -26,14 +26,15 @@ static void fresh(void)
     CHECK_EQ(scos_init(&g_card), SCOS_OK);
 }
 
-static uint16_t send(const uint8_t *cmd, uint16_t len,
-                     uint8_t *out_data, uint16_t *out_data_len)
+static uint16_t send(const uint8_t *cmd, uint16_t len, uint8_t *out_data,
+                     uint16_t *out_data_len)
 {
     uint8_t  rsp[SCOS_APDU_RSP_MAX];
     uint16_t rsp_len = 0u;
 
-    CHECK_EQ(scos_process(&g_card, cmd, len, rsp, (uint16_t)sizeof(rsp),
-                          &rsp_len), SCOS_OK);
+    CHECK_EQ(
+        scos_process(&g_card, cmd, len, rsp, (uint16_t)sizeof(rsp), &rsp_len),
+        SCOS_OK);
     CHECK(rsp_len >= 2u);
     if (rsp_len < 2u) {
         return 0u;
@@ -186,11 +187,11 @@ TEST(unknown_layout_version_refuses_to_mount)
     /* Bump the version and fix the CRC, as a future firmware would. */
     uint8_t sb[FS_SUPERBLOCK_SIZE];
     CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 0u, sb, sizeof(sb)), HAL_OK);
-    sb[4] = 0x00u;
-    sb[5] = 0x63u; /* version 99 */
+    sb[4]            = 0x00u;
+    sb[5]            = 0x63u; /* version 99 */
     const uint16_t c = crc16(sb, 14u);
-    sb[14] = (uint8_t)(c >> 8);
-    sb[15] = (uint8_t)(c & 0xFFu);
+    sb[14]           = (uint8_t)(c >> 8);
+    sb[15]           = (uint8_t)(c & 0xFFu);
     CHECK_EQ(hal_nvm_write(HAL_NVM_EEPROM, 0u, sb, sizeof(sb)), HAL_OK);
 
     /* A valid image of a layout we do not understand. Guessing at it would be
@@ -208,7 +209,7 @@ TEST(allocation_is_bounded_and_monotonic)
     CHECK_EQ(fs_store_alloc_data(100u, &a), FS_OK);
     CHECK_EQ(fs_store_alloc_data(100u, &b), FS_OK);
     CHECK_EQ(a, 0);
-    CHECK_EQ(b, 100);   /* no overlap */
+    CHECK_EQ(b, 100); /* no overlap */
     CHECK_EQ(fs_store_data_free(), SCOS_FLASH_BYTES - 200u);
 
     /* Exhaustion must be reported, never wrapped into a small offset. */
@@ -229,13 +230,15 @@ TEST(factory_layout_is_as_documented)
 {
     fresh();
 
-    struct { uint16_t idx; uint16_t fid; uint16_t parent; uint16_t size; } const
-    expect[] = {
-        { 0u, 0x3F00u, FS_NO_PARENT, 0u  },
-        { 1u, 0x2F00u, 0u,           32u },
-        { 2u, 0x7F10u, 0u,           0u  },
-        { 3u, 0x6F01u, 2u,           64u },
-        { 4u, 0x6F02u, 2u,           16u },
+    struct {
+        uint16_t idx;
+        uint16_t fid;
+        uint16_t parent;
+        uint16_t size;
+    } const expect[] = {
+        { 0u, 0x3F00u, FS_NO_PARENT, 0u }, { 1u, 0x2F00u, 0u, 32u },
+        { 2u, 0x7F10u, 0u, 0u },           { 3u, 0x6F01u, 2u, 64u },
+        { 4u, 0x6F02u, 2u, 16u },
     };
 
     for (unsigned i = 0; i < sizeof(expect) / sizeof(expect[0]); i++) {
@@ -246,9 +249,9 @@ TEST(factory_layout_is_as_documented)
         CHECK_EQ(d.size, expect[i].size);
         CHECK_EQ(d.lifecycle, FS_LC_ACTIVATED);
     }
-    CHECK_EQ(fs_child_count(0u), 2);  /* 2F00 and 7F10 */
-    CHECK_EQ(fs_child_count(2u), 2);  /* 6F01 and 6F02 */
-    CHECK_EQ(fs_child_count(3u), 0);  /* an EF has no children */
+    CHECK_EQ(fs_child_count(0u), 2); /* 2F00 and 7F10 */
+    CHECK_EQ(fs_child_count(2u), 2); /* 6F01 and 6F02 */
+    CHECK_EQ(fs_child_count(3u), 0); /* an EF has no children */
 }
 
 TEST(sfi_is_scoped_to_its_parent_df)
@@ -347,7 +350,7 @@ TEST(select_by_path)
     /* A path whose interior component is an EF is invalid: an EF has no
      * children. */
     const uint8_t bad[] = { 0x2F, 0x00, 0x6F, 0x02 };
-    fs_selection s2;
+    fs_selection  s2;
     fs_selection_reset(&s2);
     CHECK_EQ(fs_select_by_path(&s2, bad, sizeof(bad), true), FS_ERR_WRONG_TYPE);
 
@@ -411,7 +414,9 @@ TEST(ef_read_write_within_bounds)
     /* Fresh EFs read as erased. */
     CHECK_EQ(fs_ef_read(1u, 0u, 4u, back, &got), FS_OK);
     CHECK_EQ(got, 4);
-    for (unsigned i = 0; i < 4u; i++) { CHECK_HEX(back[i], 0xFF); }
+    for (unsigned i = 0; i < 4u; i++) {
+        CHECK_HEX(back[i], 0xFF);
+    }
 
     CHECK_EQ(fs_ef_write(1u, 4u, 4u, pattern), FS_OK);
     CHECK_EQ(fs_ef_read(1u, 4u, 4u, back, &got), FS_OK);
@@ -468,23 +473,29 @@ TEST(ef_access_cannot_escape_the_file)
 TEST(files_do_not_overlap_in_flash)
 {
     fresh();
-    uint8_t fill[64];
-    uint8_t back[64];
+    uint8_t  fill[64];
+    uint8_t  back[64];
     uint16_t got = 0u;
 
     os_memset(fill, 0x11, sizeof(fill));
-    CHECK_EQ(fs_ef_write(1u, 0u, 32u, fill), FS_OK);   /* 2F00, 32 B */
+    CHECK_EQ(fs_ef_write(1u, 0u, 32u, fill), FS_OK); /* 2F00, 32 B */
     os_memset(fill, 0x22, sizeof(fill));
-    CHECK_EQ(fs_ef_write(3u, 0u, 64u, fill), FS_OK);   /* 6F01, 64 B */
+    CHECK_EQ(fs_ef_write(3u, 0u, 64u, fill), FS_OK); /* 6F01, 64 B */
     os_memset(fill, 0x33, sizeof(fill));
-    CHECK_EQ(fs_ef_write(4u, 0u, 16u, fill), FS_OK);   /* 6F02, 16 B */
+    CHECK_EQ(fs_ef_write(4u, 0u, 16u, fill), FS_OK); /* 6F02, 16 B */
 
     CHECK_EQ(fs_ef_read(1u, 0u, 32u, back, &got), FS_OK);
-    for (unsigned i = 0; i < 32u; i++) { CHECK_HEX(back[i], 0x11); }
+    for (unsigned i = 0; i < 32u; i++) {
+        CHECK_HEX(back[i], 0x11);
+    }
     CHECK_EQ(fs_ef_read(3u, 0u, 64u, back, &got), FS_OK);
-    for (unsigned i = 0; i < 64u; i++) { CHECK_HEX(back[i], 0x22); }
+    for (unsigned i = 0; i < 64u; i++) {
+        CHECK_HEX(back[i], 0x22);
+    }
     CHECK_EQ(fs_ef_read(4u, 0u, 16u, back, &got), FS_OK);
-    for (unsigned i = 0; i < 16u; i++) { CHECK_HEX(back[i], 0x33); }
+    for (unsigned i = 0; i < 16u; i++) {
+        CHECK_HEX(back[i], 0x33);
+    }
 }
 
 /* ========================================================= command layer == */
@@ -520,9 +531,9 @@ TEST(select_ef_fci_reports_size_and_sfi)
     /* SELECT 2F00 (32 bytes, SFI 1), FCP template (P2=04). */
     const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x04, 0x02, 0x2F, 0x00, 0x20 };
     CHECK_HEX(send(cmd, sizeof(cmd), data, &len), SW_OK);
-    CHECK_HEX(data[0], 0x62);          /* FCP template */
+    CHECK_HEX(data[0], 0x62); /* FCP template */
     CHECK_HEX(data[2], 0x82);
-    CHECK_HEX(data[4], 0x01);          /* transparent working EF */
+    CHECK_HEX(data[4], 0x01); /* transparent working EF */
 
     /* Scan for tag 80 (size) and tag 88 (SFI). */
     bool saw_size = false, saw_sfi = false;
@@ -545,12 +556,12 @@ TEST(select_le_too_small_is_6cxx)
     fresh();
     /* Ask for 4 bytes of an FCI that is longer. ISO says answer 6CXX with the
      * exact length, which is far more useful than truncating. */
-    const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00, 0x04 };
-    uint16_t len = 0xFFFFu;
-    const uint16_t sw = send(cmd, sizeof(cmd), NULL, &len);
+    const uint8_t  cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00, 0x04 };
+    uint16_t       len   = 0xFFFFu;
+    const uint16_t sw    = send(cmd, sizeof(cmd), NULL, &len);
     CHECK_HEX(sw & 0xFF00u, 0x6C00);
-    CHECK(( sw & 0x00FFu) > 4u);
-    CHECK_EQ(len, 0);  /* and no data was returned */
+    CHECK((sw & 0x00FFu) > 4u);
+    CHECK_EQ(len, 0); /* and no data was returned */
 }
 
 TEST(read_binary_needs_a_current_ef)
@@ -574,10 +585,11 @@ TEST(read_and_update_binary_roundtrip)
     CHECK_HEX(send(sel, sizeof(sel), NULL, NULL), SW_OK);
 
     /* UPDATE BINARY at offset 0 with 4 bytes (Case 3). */
-    const uint8_t upd[] = { 0x00, 0xD6, 0x00, 0x00, 0x04,
-                            0xCA, 0xFE, 0xBA, 0xBE };
+    const uint8_t upd[] = {
+        0x00, 0xD6, 0x00, 0x00, 0x04, 0xCA, 0xFE, 0xBA, 0xBE
+    };
     CHECK_HEX(send(upd, sizeof(upd), NULL, &len), SW_OK);
-    CHECK_EQ(len, 0);   /* UPDATE returns no data */
+    CHECK_EQ(len, 0); /* UPDATE returns no data */
 
     /* READ BINARY (Case 2). */
     const uint8_t rd[] = { 0x00, 0xB0, 0x00, 0x00, 0x04 };
@@ -718,11 +730,11 @@ TEST(binary_never_escapes_under_a_p1p2_sweep)
     for (unsigned p1 = 0; p1 <= 0xFFu; p1 += 3u) {
         for (unsigned p2 = 0; p2 <= 0xFFu; p2 += 5u) {
             const uint8_t rd[] = { 0x00, 0xB0, (uint8_t)p1, (uint8_t)p2, 0x10 };
-            uint16_t sw = send(rd, sizeof(rd), NULL, NULL);
+            uint16_t      sw   = send(rd, sizeof(rd), NULL, NULL);
             CHECK((sw >> 8) >= 0x60u);
-            const uint8_t upd[] = { 0x00, 0xD6, (uint8_t)p1, (uint8_t)p2,
-                                    0x04, 0xDE, 0xAD, 0xBE, 0xEF };
-            sw = send(upd, sizeof(upd), NULL, NULL);
+            const uint8_t upd[] = { 0x00, 0xD6, (uint8_t)p1, (uint8_t)p2, 0x04,
+                                    0xDE, 0xAD, 0xBE,        0xEF };
+            sw                  = send(upd, sizeof(upd), NULL, NULL);
             CHECK((sw >> 8) >= 0x60u);
             answered += 2u;
         }

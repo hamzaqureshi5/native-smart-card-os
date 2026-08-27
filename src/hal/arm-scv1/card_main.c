@@ -12,7 +12,6 @@
 #include "scv1_internal.h"
 #include "semihost.h"
 
-
 /*
  * The card's RAM.
  *
@@ -35,7 +34,8 @@ static scos_kernel s_card;
  * A blank card never sends this: the boot loader is answering then, with its
  * own ATR. See hal_arm_io.c and docs/chip-scv1.md.
  */
-const uint8_t  scv1_atr_bytes[] = { 0x3B, 0x94, 0x11, 0x00, 0x53, 0x43, 0x4F, 0x53 };
+const uint8_t  scv1_atr_bytes[] = { 0x3B, 0x94, 0x11, 0x00,
+                                    0x53, 0x43, 0x4F, 0x53 };
 const uint32_t scv1_atr_len     = (uint32_t)sizeof(scv1_atr_bytes);
 
 static void put_u32_dec(uint32_t v)
@@ -52,7 +52,9 @@ static void put_u32_dec(uint32_t v)
     }
     char out[13];
     int  m = 0;
-    while (n > 0) { out[m++] = buf[--n]; }
+    while (n > 0) {
+        out[m++] = buf[--n];
+    }
     out[m] = '\0';
     scv1_uart_puts(out);
 }
@@ -85,7 +87,7 @@ int main(void)
     if (hal_init() != HAL_OK) {
         scv1_uart_puts("fatal: HAL init failed\r\n");
         semihost_exit(1);
-        for (;;) { }
+        for (;;) {}
     }
 
     /* A filesystem that will not mount is not a reason to stop: a card cannot
@@ -95,7 +97,7 @@ int main(void)
     if (st != SCOS_OK && s_card.lifecycle != SCOS_LC_FS_ERROR) {
         scv1_uart_puts("fatal: OS init failed\r\n");
         semihost_exit(1);
-        for (;;) { }
+        for (;;) {}
     }
     if (s_card.lifecycle == SCOS_LC_FS_ERROR) {
         scv1_uart_puts("WARNING: filesystem did not mount; answering 6581\r\n");

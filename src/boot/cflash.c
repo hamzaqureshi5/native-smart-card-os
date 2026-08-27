@@ -13,7 +13,8 @@ static bool in_range(uint32_t size, uint32_t off, uint32_t n)
     return end <= (uint64_t)size;
 }
 
-cf_status cf_erase_page(uint8_t *base, uint32_t size, uint32_t page_size, uint32_t off)
+cf_status cf_erase_page(uint8_t *base, uint32_t size, uint32_t page_size,
+                        uint32_t off)
 {
     if (base == NULL || size == 0u || page_size == 0u) {
         return CF_ERR_PARAM;

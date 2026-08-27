@@ -35,9 +35,7 @@ bool tlv_reader_done(const tlv_reader *r)
 
 /* Exhaust the reader, so a caller looping on this reader cannot spin. */
 static void exhaust(tlv_reader *r)
-{
-    r->pos = r->len;
-}
+{ r->pos = r->len; }
 
 tlv_status tlv_next(tlv_reader *r, tlv_object *out)
 {
@@ -53,10 +51,10 @@ tlv_status tlv_next(tlv_reader *r, tlv_object *out)
     }
 
     /* --- tag ------------------------------------------------------------- */
-    const uint8_t t0 = r->buf[pos];
-    uint16_t      tag = (uint16_t)t0;
+    const uint8_t t0          = r->buf[pos];
+    uint16_t      tag         = (uint16_t)t0;
     const bool    constructed = (t0 & 0x20u) != 0u;
-    pos = (uint16_t)(pos + 1u);
+    pos                       = (uint16_t)(pos + 1u);
 
     /*
      * Low five bits all set means "high tag number form": the tag number
@@ -71,8 +69,8 @@ tlv_status tlv_next(tlv_reader *r, tlv_object *out)
             return TLV_ERR_TRUNCATED;
         }
         const uint8_t t1 = r->buf[pos];
-        pos = (uint16_t)(pos + 1u);
-        tag = (uint16_t)(((uint16_t)t0 << 8) | (uint16_t)t1);
+        pos              = (uint16_t)(pos + 1u);
+        tag              = (uint16_t)(((uint16_t)t0 << 8) | (uint16_t)t1);
 
         if ((t1 & 0x80u) != 0u) {
             /* A third tag byte would follow. Not accepted. */
@@ -87,11 +85,11 @@ tlv_status tlv_next(tlv_reader *r, tlv_object *out)
         return TLV_ERR_TRUNCATED;
     }
     const uint8_t l0 = r->buf[pos];
-    pos = (uint16_t)(pos + 1u);
+    pos              = (uint16_t)(pos + 1u);
 
     uint32_t length;
     if (l0 < 0x80u) {
-        length = (uint32_t)l0;            /* short form: 0..127 */
+        length = (uint32_t)l0; /* short form: 0..127 */
     } else if (l0 == 0x80u) {
         /* Indefinite length: content runs until an end-of-contents marker
          * somewhere later. It cannot be bounds-checked before parsing the
@@ -100,7 +98,7 @@ tlv_status tlv_next(tlv_reader *r, tlv_object *out)
         return TLV_ERR_LENGTH;
     } else if (l0 == 0xFFu) {
         exhaust(r);
-        return TLV_ERR_LENGTH;            /* reserved by BER */
+        return TLV_ERR_LENGTH; /* reserved by BER */
     } else {
         const uint8_t nbytes = (uint8_t)(l0 & 0x7Fu);
         if (nbytes > TLV_MAX_LEN_BYTES) {
@@ -117,7 +115,7 @@ tlv_status tlv_next(tlv_reader *r, tlv_object *out)
         length = 0u;
         for (uint8_t i = 0; i < nbytes; i++) {
             length = (length << 8) | (uint32_t)r->buf[pos];
-            pos = (uint16_t)(pos + 1u);
+            pos    = (uint16_t)(pos + 1u);
         }
     }
 
@@ -147,14 +145,14 @@ tlv_status tlv_find(const uint8_t *buf, uint16_t len, uint16_t tag,
     tlv_reader_init(&r, buf, len);
 
     for (;;) {
-        tlv_object obj;
+        tlv_object       obj;
         const tlv_status st = tlv_next(&r, &obj);
         if (st == TLV_OK) {
             if (obj.tag == tag) {
                 *out = obj;
                 return TLV_OK;
             }
-            continue;   /* an object we are not looking for: skip it */
+            continue; /* an object we are not looking for: skip it */
         }
         if (st == TLV_END) {
             return TLV_END;
@@ -172,10 +170,10 @@ tlv_status tlv_get_uint(const tlv_object *obj, uint32_t *out)
     }
     *out = 0u;
     if (obj->value == NULL || obj->length == 0u) {
-        return TLV_ERR_LENGTH;  /* an empty integer is not a number */
+        return TLV_ERR_LENGTH; /* an empty integer is not a number */
     }
     if (obj->length > 4u) {
-        return TLV_ERR_LENGTH;  /* would not fit the return type */
+        return TLV_ERR_LENGTH; /* would not fit the return type */
     }
     uint32_t v = 0u;
     for (uint16_t i = 0; i < obj->length; i++) {
@@ -185,8 +183,8 @@ tlv_status tlv_get_uint(const tlv_object *obj, uint32_t *out)
     return TLV_OK;
 }
 
-bool tlv_put(uint8_t *buf, uint16_t cap, uint16_t *pos,
-             uint16_t tag, const uint8_t *value, uint16_t length)
+bool tlv_put(uint8_t *buf, uint16_t cap, uint16_t *pos, uint16_t tag,
+             const uint8_t *value, uint16_t length)
 {
     if (buf == NULL || pos == NULL) {
         return false;
@@ -201,9 +199,9 @@ bool tlv_put(uint8_t *buf, uint16_t cap, uint16_t *pos,
     }
 
     const uint16_t tag_bytes = (tag > 0xFFu) ? 2u : 1u;
-    const uint32_t need = (uint32_t)tag_bytes + 1u + (uint32_t)length;
+    const uint32_t need      = (uint32_t)tag_bytes + 1u + (uint32_t)length;
     if ((uint32_t)*pos + need > (uint32_t)cap) {
-        return false;   /* nothing written */
+        return false; /* nothing written */
     }
 
     uint16_t p = *pos;

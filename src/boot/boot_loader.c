@@ -9,24 +9,21 @@
 /* ISO/IEC 7816-4 status words. Reusing the standard ones rather than inventing
  * proprietary values: a reader that already understands a card understands
  * these, and there is nothing here that ISO does not already have a word for. */
-#define SW_OK               0x9000u
-#define SW_WRONG_LENGTH     0x6700u
-#define SW_WRONG_P1P2       0x6A86u
-#define SW_NO_SPACE         0x6A84u
-#define SW_COND_NOT_MET     0x6985u
-#define SW_MEMORY_FAILURE   0x6581u
-#define SW_NOT_FOUND        0x6A82u
-#define SW_BAD_DATA         0x6A80u
-#define SW_DATA_INVALID     0x6984u
-#define SW_INS_NOT_SUP      0x6D00u
-#define SW_CLA_NOT_SUP      0x6E00u
+#define SW_OK             0x9000u
+#define SW_WRONG_LENGTH   0x6700u
+#define SW_WRONG_P1P2     0x6A86u
+#define SW_NO_SPACE       0x6A84u
+#define SW_COND_NOT_MET   0x6985u
+#define SW_MEMORY_FAILURE 0x6581u
+#define SW_NOT_FOUND      0x6A82u
+#define SW_BAD_DATA       0x6A80u
+#define SW_DATA_INVALID   0x6984u
+#define SW_INS_NOT_SUP    0x6D00u
+#define SW_CLA_NOT_SUP    0x6E00u
 
-void boot_ctx_init(boot_ctx *ctx,
-                   uint8_t *osflash, uint32_t osflash_size,
-                   uint8_t *oshdr,   uint32_t oshdr_size,
-                   uint32_t page_size,
-                   uint32_t load_addr,
-                   uint32_t sram_base, uint32_t sram_size)
+void boot_ctx_init(boot_ctx *ctx, uint8_t *osflash, uint32_t osflash_size,
+                   uint8_t *oshdr, uint32_t oshdr_size, uint32_t page_size,
+                   uint32_t load_addr, uint32_t sram_base, uint32_t sram_size)
 {
     if (ctx == NULL) {
         return;
@@ -72,8 +69,7 @@ boot_slot_state boot_slot_check(const uint8_t *oshdr, uint32_t oshdr_size,
     return (h.state == BOOT_STATE_ACTIVE) ? BOOT_SLOT_ACTIVE : BOOT_SLOT_LOADED;
 }
 
-bool boot_image_plausible(const uint8_t *img, uint32_t len,
-                          uint32_t load_addr,
+bool boot_image_plausible(const uint8_t *img, uint32_t len, uint32_t load_addr,
                           uint32_t sram_base, uint32_t sram_size)
 {
     if (img == NULL || len < 8u) {
@@ -81,10 +77,10 @@ bool boot_image_plausible(const uint8_t *img, uint32_t len,
     }
     /* Little-endian, read byte-wise: the image is ARM code regardless of what
      * the host running this check happens to be. */
-    const uint32_t sp = ((uint32_t)img[0])        | ((uint32_t)img[1] << 8) |
-                        ((uint32_t)img[2] << 16)  | ((uint32_t)img[3] << 24);
-    const uint32_t pc = ((uint32_t)img[4])        | ((uint32_t)img[5] << 8) |
-                        ((uint32_t)img[6] << 16)  | ((uint32_t)img[7] << 24);
+    const uint32_t sp = ((uint32_t)img[0]) | ((uint32_t)img[1] << 8) |
+                        ((uint32_t)img[2] << 16) | ((uint32_t)img[3] << 24);
+    const uint32_t pc = ((uint32_t)img[4]) | ((uint32_t)img[5] << 8) |
+                        ((uint32_t)img[6] << 16) | ((uint32_t)img[7] << 24);
 
     /* The initial SP is the value pushed onto, so it may legitimately be one
      * past the top of SRAM -- the stack is pre-decrement. It must not be below
@@ -114,34 +110,33 @@ bool boot_image_plausible(const uint8_t *img, uint32_t len,
 
 /* ------------------------------------------------------------- responses --- */
 
-static uint16_t build_status(const boot_ctx *ctx,
-                            uint8_t *rsp, uint32_t rsp_cap, uint32_t *rsp_len)
+static uint16_t build_status(const boot_ctx *ctx, uint8_t *rsp,
+                             uint32_t rsp_cap, uint32_t *rsp_len)
 {
     if (rsp_cap < BOOT_STATUS_RSP_LEN) {
         return SW_WRONG_LENGTH;
     }
-    boot_hdr h = { 0u, 0u, 0u, 0u };
-    const boot_slot_state st = boot_slot_check(ctx->oshdr, ctx->oshdr_size,
-                                               ctx->osflash, ctx->osflash_size,
-                                               &h);
+    boot_hdr              h  = { 0u, 0u, 0u, 0u };
+    const boot_slot_state st = boot_slot_check(
+        ctx->oshdr, ctx->oshdr_size, ctx->osflash, ctx->osflash_size, &h);
     const bool have_hdr = (st == BOOT_SLOT_LOADED || st == BOOT_SLOT_ACTIVE);
 
-    rsp[0]  = 1u;                       /* loader protocol version           */
-    rsp[1]  = (uint8_t)st;
-    rsp[2]  = (uint8_t)(ctx->osflash_size >> 24);
-    rsp[3]  = (uint8_t)(ctx->osflash_size >> 16);
-    rsp[4]  = (uint8_t)(ctx->osflash_size >> 8);
-    rsp[5]  = (uint8_t)(ctx->osflash_size);
-    rsp[6]  = have_hdr ? (uint8_t)(h.length >> 24) : 0u;
-    rsp[7]  = have_hdr ? (uint8_t)(h.length >> 16) : 0u;
-    rsp[8]  = have_hdr ? (uint8_t)(h.length >> 8)  : 0u;
-    rsp[9]  = have_hdr ? (uint8_t)(h.length)       : 0u;
-    rsp[10] = have_hdr ? (uint8_t)(h.image_crc >> 8) : 0u;
-    rsp[11] = have_hdr ? (uint8_t)(h.image_crc)      : 0u;
-    rsp[12] = (uint8_t)BOOT_BLOCK_SIZE;
-    rsp[13] = ctx->erased ? 1u : 0u;
-    rsp[14] = (uint8_t)(ctx->high_water >> 8);
-    rsp[15] = (uint8_t)(ctx->high_water);
+    rsp[0]   = 1u; /* loader protocol version           */
+    rsp[1]   = (uint8_t)st;
+    rsp[2]   = (uint8_t)(ctx->osflash_size >> 24);
+    rsp[3]   = (uint8_t)(ctx->osflash_size >> 16);
+    rsp[4]   = (uint8_t)(ctx->osflash_size >> 8);
+    rsp[5]   = (uint8_t)(ctx->osflash_size);
+    rsp[6]   = have_hdr ? (uint8_t)(h.length >> 24) : 0u;
+    rsp[7]   = have_hdr ? (uint8_t)(h.length >> 16) : 0u;
+    rsp[8]   = have_hdr ? (uint8_t)(h.length >> 8) : 0u;
+    rsp[9]   = have_hdr ? (uint8_t)(h.length) : 0u;
+    rsp[10]  = have_hdr ? (uint8_t)(h.image_crc >> 8) : 0u;
+    rsp[11]  = have_hdr ? (uint8_t)(h.image_crc) : 0u;
+    rsp[12]  = (uint8_t)BOOT_BLOCK_SIZE;
+    rsp[13]  = ctx->erased ? 1u : 0u;
+    rsp[14]  = (uint8_t)(ctx->high_water >> 8);
+    rsp[15]  = (uint8_t)(ctx->high_water);
     *rsp_len = BOOT_STATUS_RSP_LEN;
     return SW_OK;
 }
@@ -157,7 +152,8 @@ static uint16_t do_erase(boot_ctx *ctx)
     if (cf_erase_all(ctx->oshdr, ctx->oshdr_size, ctx->page_size) != CF_OK) {
         return SW_MEMORY_FAILURE;
     }
-    if (cf_erase_all(ctx->osflash, ctx->osflash_size, ctx->page_size) != CF_OK) {
+    if (cf_erase_all(ctx->osflash, ctx->osflash_size, ctx->page_size) !=
+        CF_OK) {
         return SW_MEMORY_FAILURE;
     }
     ctx->erased     = true;
@@ -184,7 +180,8 @@ static uint16_t do_load(boot_ctx *ctx, uint8_t p1, uint8_t p2,
     if (end > (uint64_t)ctx->osflash_size) {
         return SW_NO_SPACE;
     }
-    const cf_status cst = cf_program(ctx->osflash, ctx->osflash_size, off, data, lc);
+    const cf_status cst =
+        cf_program(ctx->osflash, ctx->osflash_size, off, data, lc);
     if (cst == CF_ERR_NOT_ERASED) {
         /* The host sent the same block twice, or overlapping blocks. Real
          * flash cannot honour that and neither do we. */
@@ -208,7 +205,7 @@ static uint16_t do_verify(boot_ctx *ctx, const uint8_t *data, uint32_t lc)
         return SW_COND_NOT_MET;
     }
     const uint32_t len = ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
-                         ((uint32_t)data[2] << 8)  | (uint32_t)data[3];
+                         ((uint32_t)data[2] << 8) | (uint32_t)data[3];
     const uint16_t crc = (uint16_t)(((uint16_t)data[4] << 8) | data[5]);
 
     if (len == 0u || len > ctx->osflash_size) {
@@ -223,14 +220,14 @@ static uint16_t do_verify(boot_ctx *ctx, const uint8_t *data, uint32_t lc)
     if (crc16(ctx->osflash, len) != crc) {
         return SW_BAD_DATA;
     }
-    if (!boot_image_plausible(ctx->osflash, len,
-                              ctx->load_addr, ctx->sram_base, ctx->sram_size)) {
+    if (!boot_image_plausible(ctx->osflash, len, ctx->load_addr, ctx->sram_base,
+                              ctx->sram_size)) {
         /* The bytes arrived intact but they are not an ARMv7-M image for this
          * chip. Refusing here, at VERIFY, is the difference between the host
          * seeing an error and the card faulting silently on the next reset. */
         return SW_DATA_INVALID;
     }
-    uint8_t raw[BOOT_HDR_SIZE];
+    uint8_t  raw[BOOT_HDR_SIZE];
     boot_hdr h;
     h.length    = len;
     h.image_crc = crc;
@@ -238,7 +235,8 @@ static uint16_t do_verify(boot_ctx *ctx, const uint8_t *data, uint32_t lc)
     h.version   = BOOT_HDR_VERSION;
     boot_hdr_serialise(&h, raw);
 
-    if (cf_program(ctx->oshdr, ctx->oshdr_size, 0u, raw, BOOT_HDR_SIZE) != CF_OK) {
+    if (cf_program(ctx->oshdr, ctx->oshdr_size, 0u, raw, BOOT_HDR_SIZE) !=
+        CF_OK) {
         return SW_MEMORY_FAILURE;
     }
     return SW_OK;
@@ -246,10 +244,9 @@ static uint16_t do_verify(boot_ctx *ctx, const uint8_t *data, uint32_t lc)
 
 static uint16_t do_activate(boot_ctx *ctx)
 {
-    boot_hdr h = { 0u, 0u, 0u, 0u };
-    const boot_slot_state st = boot_slot_check(ctx->oshdr, ctx->oshdr_size,
-                                               ctx->osflash, ctx->osflash_size,
-                                               &h);
+    boot_hdr              h  = { 0u, 0u, 0u, 0u };
+    const boot_slot_state st = boot_slot_check(
+        ctx->oshdr, ctx->oshdr_size, ctx->osflash, ctx->osflash_size, &h);
     if (st == BOOT_SLOT_BLANK) {
         return SW_NOT_FOUND;
     }
@@ -281,8 +278,7 @@ static uint16_t do_activate(boot_ctx *ctx)
  * a 5-byte header plus Lc bytes -- and rejects everything else. Fewer states,
  * less to get wrong.
  */
-uint16_t boot_handle(boot_ctx *ctx,
-                     const uint8_t *cmd, uint32_t len,
+uint16_t boot_handle(boot_ctx *ctx, const uint8_t *cmd, uint32_t len,
                      uint8_t *rsp, uint32_t rsp_cap, uint32_t *rsp_len,
                      boot_action *action)
 {
@@ -323,35 +319,56 @@ uint16_t boot_handle(boot_ctx *ctx,
 
     switch (ins) {
     case BOOT_INS_GET_STATUS:
-        if (lc != 0u) { return SW_WRONG_LENGTH; }
-        if (p1 != 0u || p2 != 0u) { return SW_WRONG_P1P2; }
+        if (lc != 0u) {
+            return SW_WRONG_LENGTH;
+        }
+        if (p1 != 0u || p2 != 0u) {
+            return SW_WRONG_P1P2;
+        }
         return build_status(ctx, rsp, rsp_cap, rsp_len);
 
     case BOOT_INS_ERASE:
-        if (lc != 0u) { return SW_WRONG_LENGTH; }
-        if (p1 != 0u || p2 != 0u) { return SW_WRONG_P1P2; }
+        if (lc != 0u) {
+            return SW_WRONG_LENGTH;
+        }
+        if (p1 != 0u || p2 != 0u) {
+            return SW_WRONG_P1P2;
+        }
         return do_erase(ctx);
 
     case BOOT_INS_LOAD:
-        if (lc == 0u) { return SW_WRONG_LENGTH; }
+        if (lc == 0u) {
+            return SW_WRONG_LENGTH;
+        }
         return do_load(ctx, p1, p2, data, lc);
 
     case BOOT_INS_VERIFY:
-        if (lc == 0u) { return SW_WRONG_LENGTH; }
-        if (p1 != 0u || p2 != 0u) { return SW_WRONG_P1P2; }
+        if (lc == 0u) {
+            return SW_WRONG_LENGTH;
+        }
+        if (p1 != 0u || p2 != 0u) {
+            return SW_WRONG_P1P2;
+        }
         return do_verify(ctx, data, lc);
 
     case BOOT_INS_ACTIVATE:
-        if (lc != 0u) { return SW_WRONG_LENGTH; }
-        if (p1 != 0u || p2 != 0u) { return SW_WRONG_P1P2; }
+        if (lc != 0u) {
+            return SW_WRONG_LENGTH;
+        }
+        if (p1 != 0u || p2 != 0u) {
+            return SW_WRONG_P1P2;
+        }
         return do_activate(ctx);
 
     case BOOT_INS_RESTART: {
-        if (lc != 0u) { return SW_WRONG_LENGTH; }
-        if (p1 != 0u || p2 != 0u) { return SW_WRONG_P1P2; }
-        const boot_slot_state st = boot_slot_check(ctx->oshdr, ctx->oshdr_size,
-                                                   ctx->osflash,
-                                                   ctx->osflash_size, NULL);
+        if (lc != 0u) {
+            return SW_WRONG_LENGTH;
+        }
+        if (p1 != 0u || p2 != 0u) {
+            return SW_WRONG_P1P2;
+        }
+        const boot_slot_state st = boot_slot_check(
+            ctx->oshdr, ctx->oshdr_size, ctx->osflash, ctx->osflash_size, NULL);
         if (st != BOOT_SLOT_ACTIVE) {
             return SW_NOT_FOUND;
         }

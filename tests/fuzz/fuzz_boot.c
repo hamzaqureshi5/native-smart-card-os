@@ -37,14 +37,16 @@
 /* Guard bands either side of each region. Nothing the loader does may touch
  * them; ASan would catch a wild pointer, but a one-byte overrun into adjacent
  * valid memory would not show up any other way. */
-#define GUARD 64u
+#define GUARD      64u
 #define GUARD_BYTE 0xC7u
 
 static uint8_t g_flash_mem[GUARD + F_OSFLASH + GUARD];
 static uint8_t g_hdr_mem[GUARD + F_OSHDR + GUARD];
 
-static uint8_t *flash(void) { return &g_flash_mem[GUARD]; }
-static uint8_t *hdr(void)   { return &g_hdr_mem[GUARD]; }
+static uint8_t *flash(void)
+{ return &g_flash_mem[GUARD]; }
+static uint8_t *hdr(void)
+{ return &g_hdr_mem[GUARD]; }
 
 static void guards_intact(void)
 {
@@ -59,13 +61,13 @@ static void guards_intact(void)
 int scos_fuzz_boot(const uint8_t *data, size_t size)
 {
     memset(g_flash_mem, GUARD_BYTE, sizeof(g_flash_mem));
-    memset(g_hdr_mem,   GUARD_BYTE, sizeof(g_hdr_mem));
+    memset(g_hdr_mem, GUARD_BYTE, sizeof(g_hdr_mem));
     memset(flash(), 0xFF, F_OSFLASH);
-    memset(hdr(),   0xFF, F_OSHDR);
+    memset(hdr(), 0xFF, F_OSHDR);
 
     boot_ctx ctx;
-    boot_ctx_init(&ctx, flash(), F_OSFLASH, hdr(), F_OSHDR, F_PAGE,
-                  F_LOAD_ADDR, F_SRAM_BASE, F_SRAM_SIZE);
+    boot_ctx_init(&ctx, flash(), F_OSFLASH, hdr(), F_OSHDR, F_PAGE, F_LOAD_ADDR,
+                  F_SRAM_BASE, F_SRAM_SIZE);
 
     size_t pos = 0;
     while (pos < size) {
@@ -73,13 +75,13 @@ int scos_fuzz_boot(const uint8_t *data, size_t size)
         if (n == 0u || pos + n > size) {
             break;
         }
-        uint8_t  rsp[BOOT_STATUS_RSP_LEN];
-        uint32_t rsp_len = 0xFFFFFFFFu;
-        boot_action act  = (boot_action)0xFF;
+        uint8_t     rsp[BOOT_STATUS_RSP_LEN];
+        uint32_t    rsp_len = 0xFFFFFFFFu;
+        boot_action act     = (boot_action)0xFF;
 
         memset(rsp, 0x5A, sizeof(rsp));
-        const uint16_t sw = boot_handle(&ctx, &data[pos], (uint32_t)n,
-                                        rsp, sizeof(rsp), &rsp_len, &act);
+        const uint16_t sw = boot_handle(&ctx, &data[pos], (uint32_t)n, rsp,
+                                        sizeof(rsp), &rsp_len, &act);
         pos += n;
 
         /* 1. A status word is always produced, and it is a real one. */
@@ -109,7 +111,7 @@ int scos_fuzz_boot(const uint8_t *data, size_t size)
          *    is the condition the reset path trusts before it jumps, so if
          *    any sequence of commands can make it lie, the card is brickable
          *    by a hostile reader. */
-        boot_hdr h = { 0u, 0u, 0u, 0u };
+        boot_hdr              h = { 0u, 0u, 0u, 0u };
         const boot_slot_state st =
             boot_slot_check(hdr(), F_OSHDR, flash(), F_OSFLASH, &h);
         if (st == BOOT_SLOT_ACTIVE) {

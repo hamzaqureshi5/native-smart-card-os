@@ -18,13 +18,12 @@
 /* A handler validates its own P1/P2 and data, appends any response data to
  * *rsp, and RETURNS THE STATUS WORD. It must not write SW itself -- the
  * dispatcher does that, so every path is guaranteed to produce one. */
-typedef uint16_t (*scos_cmd_handler)(scos_kernel *k,
-                                     const apdu_command *cmd,
+typedef uint16_t (*scos_cmd_handler)(scos_kernel *k, const apdu_command *cmd,
                                      apdu_response *rsp);
 
 typedef struct {
     uint8_t          ins;
-    const char      *name;   /* for tracing; not used in decisions */
+    const char      *name; /* for tracing; not used in decisions */
     scos_cmd_handler handler;
 } scos_cmd_entry;
 
@@ -50,9 +49,9 @@ const char *scos_ins_name(uint8_t ins);
 uint16_t scos_cmd_select(scos_kernel *k, const apdu_command *cmd,
                          apdu_response *rsp);
 uint16_t scos_cmd_create_file(scos_kernel *k, const apdu_command *cmd,
-                             apdu_response *rsp);
+                              apdu_response *rsp);
 uint16_t scos_cmd_delete_file(scos_kernel *k, const apdu_command *cmd,
-                             apdu_response *rsp);
+                              apdu_response *rsp);
 uint16_t scos_cmd_read_binary(scos_kernel *k, const apdu_command *cmd,
                               apdu_response *rsp);
 uint16_t scos_cmd_update_binary(scos_kernel *k, const apdu_command *cmd,

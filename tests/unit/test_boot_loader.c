@@ -31,7 +31,7 @@ static uint8_t g_oshdr[T_OSHDR];
 static void chip_blank(boot_ctx *ctx)
 {
     memset(g_osflash, 0xFF, sizeof(g_osflash));
-    memset(g_oshdr,   0xFF, sizeof(g_oshdr));
+    memset(g_oshdr, 0xFF, sizeof(g_oshdr));
     boot_ctx_init(ctx, g_osflash, T_OSFLASH, g_oshdr, T_OSHDR, T_PAGE,
                   T_LOAD_ADDR, T_SRAM_BASE, T_SRAM_SIZE);
 }
@@ -46,10 +46,14 @@ static uint32_t make_image(uint8_t *out, uint32_t n)
      * used offset 0x40 and the 64-byte image legitimately failed the bounds
      * check; the check was right and the test data was wrong. */
     const uint32_t pc = T_LOAD_ADDR + 0x09u; /* offset 8, Thumb bit set */
-    out[0] = (uint8_t)sp;         out[1] = (uint8_t)(sp >> 8);
-    out[2] = (uint8_t)(sp >> 16); out[3] = (uint8_t)(sp >> 24);
-    out[4] = (uint8_t)pc;         out[5] = (uint8_t)(pc >> 8);
-    out[6] = (uint8_t)(pc >> 16); out[7] = (uint8_t)(pc >> 24);
+    out[0]            = (uint8_t)sp;
+    out[1]            = (uint8_t)(sp >> 8);
+    out[2]            = (uint8_t)(sp >> 16);
+    out[3]            = (uint8_t)(sp >> 24);
+    out[4]            = (uint8_t)pc;
+    out[5]            = (uint8_t)(pc >> 8);
+    out[6]            = (uint8_t)(pc >> 16);
+    out[7]            = (uint8_t)(pc >> 24);
     for (uint32_t i = 8; i < n; i++) {
         out[i] = (uint8_t)(i * 7u);
     }
@@ -61,11 +65,12 @@ static uint32_t make_image(uint8_t *out, uint32_t n)
 static uint8_t  g_rsp[64];
 static uint32_t g_rsp_len;
 
-static uint16_t send(boot_ctx *ctx, const uint8_t *cmd, uint32_t len, boot_action *act)
+static uint16_t send(boot_ctx *ctx, const uint8_t *cmd, uint32_t len,
+                     boot_action *act)
 {
     boot_action local = BOOT_ACT_NONE;
     memset(g_rsp, 0xA5, sizeof(g_rsp));
-    g_rsp_len = 0xFFFFFFFFu;
+    g_rsp_len         = 0xFFFFFFFFu;
     const uint16_t sw = boot_handle(ctx, cmd, len, g_rsp, sizeof(g_rsp),
                                     &g_rsp_len, (act != NULL) ? act : &local);
     return sw;
@@ -83,23 +88,36 @@ static uint16_t send_image(boot_ctx *ctx, const uint8_t *img, uint32_t n)
     uint8_t cmd[5 + BOOT_BLOCK_SIZE];
     for (uint32_t off = 0, blk = 0; off < n; off += BOOT_BLOCK_SIZE, blk++) {
         uint32_t chunk = n - off;
-        if (chunk > BOOT_BLOCK_SIZE) { chunk = BOOT_BLOCK_SIZE; }
-        cmd[0] = 0x80; cmd[1] = 0x54;
-        cmd[2] = (uint8_t)(blk >> 8); cmd[3] = (uint8_t)blk;
+        if (chunk > BOOT_BLOCK_SIZE) {
+            chunk = BOOT_BLOCK_SIZE;
+        }
+        cmd[0] = 0x80;
+        cmd[1] = 0x54;
+        cmd[2] = (uint8_t)(blk >> 8);
+        cmd[3] = (uint8_t)blk;
         cmd[4] = (uint8_t)chunk;
         memcpy(&cmd[5], &img[off], chunk);
         const uint16_t sw = send(ctx, cmd, 5u + chunk, NULL);
-        if (sw != 0x9000u) { return sw; }
+        if (sw != 0x9000u) {
+            return sw;
+        }
     }
     return 0x9000u;
 }
 
 static uint16_t send_verify(boot_ctx *ctx, uint32_t len, uint16_t crc)
 {
-    const uint8_t c[] = { 0x80, 0xA0, 0x00, 0x00, 0x06,
-                          (uint8_t)(len >> 24), (uint8_t)(len >> 16),
-                          (uint8_t)(len >> 8),  (uint8_t)len,
-                          (uint8_t)(crc >> 8),  (uint8_t)crc };
+    const uint8_t c[] = { 0x80,
+                          0xA0,
+                          0x00,
+                          0x00,
+                          0x06,
+                          (uint8_t)(len >> 24),
+                          (uint8_t)(len >> 16),
+                          (uint8_t)(len >> 8),
+                          (uint8_t)len,
+                          (uint8_t)(crc >> 8),
+                          (uint8_t)crc };
     return send(ctx, c, sizeof(c), NULL);
 }
 
@@ -124,8 +142,8 @@ TEST(full_load_sequence)
     boot_ctx ctx;
     chip_blank(&ctx);
 
-    uint8_t img[600];
-    const uint32_t n = make_image(img, sizeof(img));
+    uint8_t        img[600];
+    const uint32_t n   = make_image(img, sizeof(img));
     const uint16_t crc = crc16(img, n);
 
     CHECK_HEX(send_erase(&ctx), 0x9000);
@@ -148,7 +166,7 @@ TEST(activate_is_idempotent)
 {
     boot_ctx ctx;
     chip_blank(&ctx);
-    uint8_t img[256];
+    uint8_t        img[256];
     const uint32_t n = make_image(img, sizeof(img));
     CHECK_HEX(send_erase(&ctx), 0x9000);
     CHECK_HEX(send_image(&ctx, img, n), 0x9000);
@@ -165,14 +183,15 @@ TEST(get_status_reports_the_slot)
     const uint8_t c[] = { 0x80, 0xF2, 0x00, 0x00, 0x00 };
     CHECK_HEX(send(&ctx, c, sizeof(c), NULL), 0x9000);
     CHECK_EQ(g_rsp_len, BOOT_STATUS_RSP_LEN);
-    CHECK_EQ(g_rsp[0], 1);                       /* protocol version        */
+    CHECK_EQ(g_rsp[0], 1); /* protocol version        */
     CHECK_EQ(g_rsp[1], BOOT_SLOT_BLANK);
     CHECK_EQ(((uint32_t)g_rsp[2] << 24) | ((uint32_t)g_rsp[3] << 16) |
-             ((uint32_t)g_rsp[4] << 8)  | g_rsp[5], T_OSFLASH);
+                 ((uint32_t)g_rsp[4] << 8) | g_rsp[5],
+             T_OSFLASH);
     CHECK_EQ(g_rsp[12], BOOT_BLOCK_SIZE);
-    CHECK_EQ(g_rsp[13], 0);                      /* not erased yet          */
+    CHECK_EQ(g_rsp[13], 0); /* not erased yet          */
 
-    uint8_t img[256];
+    uint8_t        img[256];
     const uint32_t n = make_image(img, sizeof(img));
     CHECK_HEX(send_erase(&ctx), 0x9000);
     CHECK_HEX(send_image(&ctx, img, n), 0x9000);
@@ -182,7 +201,8 @@ TEST(get_status_reports_the_slot)
     CHECK_HEX(send(&ctx, c, sizeof(c), NULL), 0x9000);
     CHECK_EQ(g_rsp[1], BOOT_SLOT_ACTIVE);
     CHECK_EQ(((uint32_t)g_rsp[6] << 24) | ((uint32_t)g_rsp[7] << 16) |
-             ((uint32_t)g_rsp[8] << 8)  | g_rsp[9], n);
+                 ((uint32_t)g_rsp[8] << 8) | g_rsp[9],
+             n);
     CHECK_EQ(g_rsp[13], 1);
 }
 
@@ -219,11 +239,11 @@ TEST(restart_needs_an_active_image)
     boot_ctx ctx;
     chip_blank(&ctx);
     const uint8_t c[] = { 0x80, 0xF0, 0x00, 0x00, 0x00 };
-    boot_action act = BOOT_ACT_RESTART;
+    boot_action   act = BOOT_ACT_RESTART;
     CHECK_HEX(send(&ctx, c, sizeof(c), &act), 0x6A82);
     CHECK_EQ(act, BOOT_ACT_NONE);
 
-    uint8_t img[128];
+    uint8_t        img[128];
     const uint32_t n = make_image(img, sizeof(img));
     CHECK_HEX(send_erase(&ctx), 0x9000);
     CHECK_HEX(send_image(&ctx, img, n), 0x9000);
@@ -246,8 +266,8 @@ TEST(rewriting_a_block_with_different_data_is_refused)
     chip_blank(&ctx);
     CHECK_HEX(send_erase(&ctx), 0x9000);
 
-    uint8_t cmd[5 + 8] = { 0x80, 0x54, 0x00, 0x00, 0x08,
-                           0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
+    uint8_t cmd[5 + 8] = { 0x80, 0x54, 0x00, 0x00, 0x08, 0x11, 0x22,
+                           0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
     CHECK_HEX(send(&ctx, cmd, sizeof(cmd), NULL), 0x9000);
 
     /* Sending the IDENTICAL block again succeeds, and that is correct: at the
@@ -263,7 +283,7 @@ TEST(rewriting_a_block_with_different_data_is_refused)
      * the AND of the two blocks and report success. */
     cmd[5] = 0x22;
     CHECK_HEX(send(&ctx, cmd, sizeof(cmd), NULL), 0x6985);
-    CHECK_HEX(g_osflash[0], 0x11);      /* untouched */
+    CHECK_HEX(g_osflash[0], 0x11); /* untouched */
     CHECK_HEX(g_osflash[7], 0x88);
 }
 
@@ -291,7 +311,7 @@ TEST(erase_rejects_unaligned_and_out_of_range)
     CHECK_EQ(cf_erase_page(f, sizeof(f), 1024u, 2048u), CF_ERR_RANGE);
     CHECK_EQ(cf_erase_page(f, sizeof(f), 1024u, 1024u), CF_OK);
     CHECK_HEX(f[1024], 0xFF);
-    CHECK_HEX(f[1023], 0x00);          /* the other page untouched */
+    CHECK_HEX(f[1023], 0x00); /* the other page untouched */
 }
 
 TEST(program_bounds_cannot_wrap)
@@ -310,7 +330,7 @@ TEST(verify_rejects_a_wrong_crc)
 {
     boot_ctx ctx;
     chip_blank(&ctx);
-    uint8_t img[256];
+    uint8_t        img[256];
     const uint32_t n = make_image(img, sizeof(img));
     CHECK_HEX(send_erase(&ctx), 0x9000);
     CHECK_HEX(send_image(&ctx, img, n), 0x9000);
@@ -325,7 +345,7 @@ TEST(verify_rejects_a_length_never_written)
 {
     boot_ctx ctx;
     chip_blank(&ctx);
-    uint8_t img[128];
+    uint8_t        img[128];
     const uint32_t n = make_image(img, sizeof(img));
     CHECK_HEX(send_erase(&ctx), 0x9000);
     CHECK_HEX(send_image(&ctx, img, n), 0x9000);
@@ -341,7 +361,9 @@ TEST(verify_rejects_a_valid_crc_over_non_code)
     boot_ctx ctx;
     chip_blank(&ctx);
     uint8_t junk[128];
-    for (uint32_t i = 0; i < sizeof(junk); i++) { junk[i] = (uint8_t)i; }
+    for (uint32_t i = 0; i < sizeof(junk); i++) {
+        junk[i] = (uint8_t)i;
+    }
     CHECK_HEX(send_erase(&ctx), 0x9000);
     CHECK_HEX(send_image(&ctx, junk, sizeof(junk)), 0x9000);
     CHECK_HEX(send_verify(&ctx, sizeof(junk), crc16(junk, sizeof(junk))),
@@ -352,8 +374,8 @@ TEST(plausibility_checks_both_vectors)
 {
     uint8_t img[64];
     (void)make_image(img, sizeof(img));
-    CHECK(boot_image_plausible(img, sizeof(img), T_LOAD_ADDR,
-                               T_SRAM_BASE, T_SRAM_SIZE));
+    CHECK(boot_image_plausible(img, sizeof(img), T_LOAD_ADDR, T_SRAM_BASE,
+                               T_SRAM_SIZE));
 
     /* Stack pointer below SRAM. */
     uint8_t bad_sp[64];
@@ -372,20 +394,23 @@ TEST(plausibility_checks_both_vectors)
     /* Entry point past the end of the image. */
     uint8_t bad_pc[64];
     (void)make_image(bad_pc, sizeof(bad_pc));
-    bad_pc[4] = 0x01; bad_pc[5] = 0xF0;   /* 0x0000F001 -> entry 0xF000 */
+    bad_pc[4] = 0x01;
+    bad_pc[5] = 0xF0; /* 0x0000F001 -> entry 0xF000 */
     CHECK(!boot_image_plausible(bad_pc, sizeof(bad_pc), T_LOAD_ADDR,
                                 T_SRAM_BASE, T_SRAM_SIZE));
 
     /* Truncated. */
-    CHECK(!boot_image_plausible(img, 7u, T_LOAD_ADDR, T_SRAM_BASE, T_SRAM_SIZE));
-    CHECK(!boot_image_plausible(NULL, 64u, T_LOAD_ADDR, T_SRAM_BASE, T_SRAM_SIZE));
+    CHECK(
+        !boot_image_plausible(img, 7u, T_LOAD_ADDR, T_SRAM_BASE, T_SRAM_SIZE));
+    CHECK(!boot_image_plausible(NULL, 64u, T_LOAD_ADDR, T_SRAM_BASE,
+                                T_SRAM_SIZE));
 }
 
 TEST(a_corrupted_image_stops_the_boot)
 {
     boot_ctx ctx;
     chip_blank(&ctx);
-    uint8_t img[256];
+    uint8_t        img[256];
     const uint32_t n = make_image(img, sizeof(img));
     CHECK_HEX(send_erase(&ctx), 0x9000);
     CHECK_HEX(send_image(&ctx, img, n), 0x9000);
@@ -407,13 +432,13 @@ TEST(a_corrupted_header_reads_as_blank)
 {
     boot_ctx ctx;
     chip_blank(&ctx);
-    uint8_t img[128];
+    uint8_t        img[128];
     const uint32_t n = make_image(img, sizeof(img));
     CHECK_HEX(send_erase(&ctx), 0x9000);
     CHECK_HEX(send_image(&ctx, img, n), 0x9000);
     CHECK_HEX(send_verify(&ctx, n, crc16(img, n)), 0x9000);
 
-    g_oshdr[7] ^= 0x01u;                  /* damage the length field */
+    g_oshdr[7] ^= 0x01u; /* damage the length field */
     CHECK_EQ(boot_slot_check(g_oshdr, T_OSHDR, g_osflash, T_OSFLASH, NULL),
              BOOT_SLOT_BLANK);
 }
@@ -423,23 +448,37 @@ TEST(malformed_apdus_never_succeed)
     boot_ctx ctx;
     chip_blank(&ctx);
 
-    struct { const uint8_t *c; uint32_t n; uint16_t sw; const char *why; } cases[] = {
-        { (const uint8_t[]){ 0x00, 0xF2, 0x00, 0x00, 0x00 }, 5, 0x6E00, "wrong CLA" },
-        { (const uint8_t[]){ 0x80, 0xFF, 0x00, 0x00, 0x00 }, 5, 0x6D00, "unknown INS" },
-        { (const uint8_t[]){ 0x80, 0xF2, 0x01, 0x00, 0x00 }, 5, 0x6A86, "P1 not 0" },
-        { (const uint8_t[]){ 0x80, 0x0E, 0x00, 0x01, 0x00 }, 5, 0x6A86, "P2 not 0" },
-        { (const uint8_t[]){ 0x80, 0x0E, 0x00 },             3, 0x6700, "short header" },
-        { (const uint8_t[]){ 0x80, 0x0E, 0x00, 0x00, 0x05 }, 5, 0x6700, "Lc with no body" },
-        { (const uint8_t[]){ 0x80, 0x54, 0x00, 0x00, 0x05, 0x01 }, 6, 0x6700, "Lc > body" },
-        { (const uint8_t[]){ 0x80, 0x54, 0x00, 0x00, 0x01, 0x01, 0x02 }, 7, 0x6700, "Lc < body" },
-        { (const uint8_t[]){ 0x80, 0xA0, 0x00, 0x00, 0x02, 0x01, 0x02 }, 7, 0x6700, "VERIFY Lc != 6" },
-        { (const uint8_t[]){ 0x80, 0x54, 0x00, 0x00, 0x00 }, 5, 0x6700, "LOAD with no data" },
+    struct {
+        const uint8_t *c;
+        uint32_t       n;
+        uint16_t       sw;
+        const char    *why;
+    } cases[] = {
+        { (const uint8_t[]){ 0x00, 0xF2, 0x00, 0x00, 0x00 }, 5, 0x6E00,
+          "wrong CLA" },
+        { (const uint8_t[]){ 0x80, 0xFF, 0x00, 0x00, 0x00 }, 5, 0x6D00,
+          "unknown INS" },
+        { (const uint8_t[]){ 0x80, 0xF2, 0x01, 0x00, 0x00 }, 5, 0x6A86,
+          "P1 not 0" },
+        { (const uint8_t[]){ 0x80, 0x0E, 0x00, 0x01, 0x00 }, 5, 0x6A86,
+          "P2 not 0" },
+        { (const uint8_t[]){ 0x80, 0x0E, 0x00 }, 3, 0x6700, "short header" },
+        { (const uint8_t[]){ 0x80, 0x0E, 0x00, 0x00, 0x05 }, 5, 0x6700,
+          "Lc with no body" },
+        { (const uint8_t[]){ 0x80, 0x54, 0x00, 0x00, 0x05, 0x01 }, 6, 0x6700,
+          "Lc > body" },
+        { (const uint8_t[]){ 0x80, 0x54, 0x00, 0x00, 0x01, 0x01, 0x02 }, 7,
+          0x6700, "Lc < body" },
+        { (const uint8_t[]){ 0x80, 0xA0, 0x00, 0x00, 0x02, 0x01, 0x02 }, 7,
+          0x6700, "VERIFY Lc != 6" },
+        { (const uint8_t[]){ 0x80, 0x54, 0x00, 0x00, 0x00 }, 5, 0x6700,
+          "LOAD with no data" },
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         const uint16_t sw = send(&ctx, cases[i].c, cases[i].n, NULL);
         if (sw != cases[i].sw) {
-            (void)printf("      case '%s': got %04X want %04X\n",
-                         cases[i].why, sw, cases[i].sw);
+            (void)printf("      case '%s': got %04X want %04X\n", cases[i].why,
+                         sw, cases[i].sw);
         }
         CHECK_HEX(sw, cases[i].sw);
     }
@@ -460,14 +499,17 @@ TEST(block_index_cannot_reach_past_the_slot)
 
     /* The last legal block, and the first illegal one. */
     const uint32_t last = (T_OSFLASH / BOOT_BLOCK_SIZE) - 1u;
-    uint8_t ok[5 + BOOT_BLOCK_SIZE];
-    ok[0] = 0x80; ok[1] = 0x54;
-    ok[2] = (uint8_t)(last >> 8); ok[3] = (uint8_t)last;
+    uint8_t        ok[5 + BOOT_BLOCK_SIZE];
+    ok[0] = 0x80;
+    ok[1] = 0x54;
+    ok[2] = (uint8_t)(last >> 8);
+    ok[3] = (uint8_t)last;
     ok[4] = (uint8_t)BOOT_BLOCK_SIZE;
     memset(&ok[5], 0x5A, BOOT_BLOCK_SIZE);
     CHECK_HEX(send(&ctx, ok, sizeof(ok), NULL), 0x9000);
 
-    ok[2] = (uint8_t)((last + 1u) >> 8); ok[3] = (uint8_t)(last + 1u);
+    ok[2] = (uint8_t)((last + 1u) >> 8);
+    ok[3] = (uint8_t)(last + 1u);
     CHECK_HEX(send(&ctx, ok, sizeof(ok), NULL), 0x6A84);
 }
 
@@ -477,7 +519,7 @@ TEST(erase_recycles_a_loaded_card)
      * the state it left the factory in. */
     boot_ctx ctx;
     chip_blank(&ctx);
-    uint8_t img[512];
+    uint8_t        img[512];
     const uint32_t n = make_image(img, sizeof(img));
     CHECK_HEX(send_erase(&ctx), 0x9000);
     CHECK_HEX(send_image(&ctx, img, n), 0x9000);
@@ -493,9 +535,9 @@ TEST(erase_recycles_a_loaded_card)
     CHECK(cf_is_erased(g_oshdr, T_OSHDR));
 
     /* And it can be reloaded with something different afterwards. */
-    uint8_t img2[256];
+    uint8_t        img2[256];
     const uint32_t n2 = make_image(img2, sizeof(img2));
-    img2[100] = 0xC3;
+    img2[100]         = 0xC3;
     CHECK_HEX(send_image(&ctx, img2, n2), 0x9000);
     CHECK_HEX(send_verify(&ctx, n2, crc16(img2, n2)), 0x9000);
     CHECK_HEX(send_activate(&ctx), 0x9000);

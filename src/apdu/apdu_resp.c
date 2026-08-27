@@ -38,16 +38,15 @@ bool apdu_rsp_put(apdu_response *r, const uint8_t *src, uint16_t n)
     /* Always keep two bytes in reserve for SW, so apdu_rsp_finish() cannot
      * fail after the payload has been accepted. Arithmetic in uint32_t: cap is
      * uint16_t and len + n could otherwise wrap. */
-    const uint32_t reserve   = 2u;
-    const uint32_t available = (r->cap >= reserve)
-                                   ? ((uint32_t)r->cap - reserve)
-                                   : 0u;
+    const uint32_t reserve = 2u;
+    const uint32_t available =
+        (r->cap >= reserve) ? ((uint32_t)r->cap - reserve) : 0u;
     if ((uint32_t)r->len + (uint32_t)n > available) {
         r->overflow = true;
         return false;
     }
-    if (!os_memcpy_checked(&r->buf[r->len], (size_t)(r->cap - r->len),
-                           src, (size_t)n)) {
+    if (!os_memcpy_checked(&r->buf[r->len], (size_t)(r->cap - r->len), src,
+                           (size_t)n)) {
         r->overflow = true;
         return false;
     }
@@ -56,9 +55,7 @@ bool apdu_rsp_put(apdu_response *r, const uint8_t *src, uint16_t n)
 }
 
 bool apdu_rsp_put_u8(apdu_response *r, uint8_t b)
-{
-    return apdu_rsp_put(r, &b, 1u);
-}
+{ return apdu_rsp_put(r, &b, 1u); }
 
 bool apdu_rsp_put_u16(apdu_response *r, uint16_t v)
 {

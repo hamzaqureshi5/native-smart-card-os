@@ -42,26 +42,37 @@
 static uint16_t fs_error_to_sw(fs_status st)
 {
     switch (st) {
-    case FS_OK:                   return SW_OK;
-    case FS_ERR_NOT_FOUND:        return SW_FILE_NOT_FOUND;             /* 6A82 */
-    case FS_ERR_NOT_USABLE:       return SW_CONDITIONS_NOT_SATISFIED;   /* 6985 */
-    case FS_ERR_WRONG_TYPE:       return SW_CMD_INCOMPATIBLE_FILE;      /* 6981 */
-    case FS_ERR_RANGE:            return SW_WRONG_P1P2;                 /* 6B00 */
-    case FS_ERR_PARAM:            return SW_INCORRECT_P1P2;             /* 6A86 */
-    case FS_ERR_NO_SPACE:         return SW_NOT_ENOUGH_SPACE;           /* 6A84 */
-    case FS_ERR_EXISTS:           return SW_FILE_ALREADY_EXISTS;        /* 6A89 */
+    case FS_OK:
+        return SW_OK;
+    case FS_ERR_NOT_FOUND:
+        return SW_FILE_NOT_FOUND; /* 6A82 */
+    case FS_ERR_NOT_USABLE:
+        return SW_CONDITIONS_NOT_SATISFIED; /* 6985 */
+    case FS_ERR_WRONG_TYPE:
+        return SW_CMD_INCOMPATIBLE_FILE; /* 6981 */
+    case FS_ERR_RANGE:
+        return SW_WRONG_P1P2; /* 6B00 */
+    case FS_ERR_PARAM:
+        return SW_INCORRECT_P1P2; /* 6A86 */
+    case FS_ERR_NO_SPACE:
+        return SW_NOT_ENOUGH_SPACE; /* 6A84 */
+    case FS_ERR_EXISTS:
+        return SW_FILE_ALREADY_EXISTS; /* 6A89 */
     case FS_ERR_CORRUPT:
     case FS_ERR_VERSION:
     case FS_ERR_NOT_FORMATTED:
         /* A structurally broken card. 6581 ("memory failure") is the honest
          * answer: the command did not fail because of anything the caller did. */
-        return SW_MEMORY_FAILURE;                                       /* 6581 */
-    case FS_ERR_NVM:              return SW_MEMORY_FAILURE;             /* 6581 */
-    default:                      return SW_NO_PRECISE_DIAGNOSIS;       /* 6F00 */
+        return SW_MEMORY_FAILURE; /* 6581 */
+    case FS_ERR_NVM:
+        return SW_MEMORY_FAILURE; /* 6581 */
+    default:
+        return SW_NO_PRECISE_DIAGNOSIS; /* 6F00 */
     }
 }
 
-uint16_t scos_fs_error_to_sw(fs_status st) { return fs_error_to_sw(st); }
+uint16_t scos_fs_error_to_sw(fs_status st)
+{ return fs_error_to_sw(st); }
 
 /* Append the selected file's control information, wrapped in the template the
  * caller asked for. */
@@ -78,13 +89,13 @@ static uint16_t emit_fci(const apdu_command *cmd, apdu_response *rsp,
         return SW_FUNC_NOT_SUPPORTED; /* 6A81 */
     }
 
-    fs_descriptor d;
+    fs_descriptor   d;
     const fs_status st = fs_get(index, &d);
     if (st != FS_OK) {
         return fs_error_to_sw(st);
     }
 
-    uint8_t  body[32];
+    uint8_t        body[32];
     const uint16_t body_len = fs_build_fcp(&d, body, (uint16_t)sizeof(body));
     if (body_len == 0u) {
         return SW_NO_PRECISE_DIAGNOSIS;
@@ -201,7 +212,7 @@ uint16_t scos_cmd_select(scos_kernel *k, const apdu_command *cmd,
             return SW_WRONG_DATA; /* 6A80 */
         }
         st = fs_select_by_path(&sel, cmd->data, cmd->lc,
-                              cmd->p1 == SEL_BY_PATH_FROM_MF);
+                               cmd->p1 == SEL_BY_PATH_FROM_MF);
         break;
     }
 

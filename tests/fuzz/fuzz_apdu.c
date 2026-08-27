@@ -9,7 +9,7 @@ int scos_fuzz_apdu(const uint8_t *data, size_t size)
     if (size > 0xFFFFu) {
         return 0;
     }
-    apdu_command cmd;
+    apdu_command            cmd;
     const apdu_parse_status st = apdu_parse(data, (uint16_t)size, &cmd);
 
     /* Whatever the input, the parser must report a defined status and never
@@ -35,10 +35,10 @@ int scos_fuzz_apdu(const uint8_t *data, size_t size)
             }
             (void)sink;
         } else if (cmd.data != NULL) {
-            __builtin_trap();   /* no data field, so no pointer to one */
+            __builtin_trap(); /* no data field, so no pointer to one */
         }
         if (cmd.le_present && (cmd.le == 0u || cmd.le > APDU_SHORT_LE_MAX)) {
-            __builtin_trap();   /* Le is normalised to 1..256 */
+            __builtin_trap(); /* Le is normalised to 1..256 */
         }
         break;
     case APDU_PARSE_TOO_SHORT:
@@ -51,7 +51,7 @@ int scos_fuzz_apdu(const uint8_t *data, size_t size)
         }
         break;
     default:
-        __builtin_trap();       /* undefined status */
+        __builtin_trap(); /* undefined status */
     }
 
     /* Every status must map to a real status word. */

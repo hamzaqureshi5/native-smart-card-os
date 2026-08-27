@@ -95,8 +95,8 @@ uint16_t scos_cmd_read_binary(scos_kernel *k, const apdu_command *cmd,
         return SW_WRONG_LENGTH; /* 6700 */
     }
 
-    uint16_t index  = FS_INVALID_INDEX;
-    uint16_t offset = 0u;
+    uint16_t       index  = FS_INVALID_INDEX;
+    uint16_t       offset = 0u;
     const uint16_t rsw = resolve_target(k, cmd->p1, cmd->p2, &index, &offset);
     if (rsw != SW_OK) {
         return rsw;
@@ -104,14 +104,13 @@ uint16_t scos_cmd_read_binary(scos_kernel *k, const apdu_command *cmd,
 
     /* Le is 1..256, and the response buffer is sized for the maximum, so the
      * read cannot overflow it. Asserted rather than assumed. */
-    uint8_t  buf[APDU_SHORT_LE_MAX];
+    uint8_t buf[APDU_SHORT_LE_MAX];
     if (cmd->le > sizeof(buf)) {
         return SW_NO_PRECISE_DIAGNOSIS;
     }
 
-    uint16_t got = 0u;
-    const fs_status st =
-        fs_ef_read(index, offset, cmd->le, buf, &got);
+    uint16_t        got = 0u;
+    const fs_status st  = fs_ef_read(index, offset, cmd->le, buf, &got);
     if (st != FS_OK) {
         return scos_fs_error_to_sw(st);
     }
@@ -152,8 +151,8 @@ uint16_t scos_cmd_update_binary(scos_kernel *k, const apdu_command *cmd,
         return SW_WRONG_LENGTH;
     }
 
-    uint16_t index  = FS_INVALID_INDEX;
-    uint16_t offset = 0u;
+    uint16_t       index  = FS_INVALID_INDEX;
+    uint16_t       offset = 0u;
     const uint16_t rsw = resolve_target(k, cmd->p1, cmd->p2, &index, &offset);
     if (rsw != SW_OK) {
         return rsw;

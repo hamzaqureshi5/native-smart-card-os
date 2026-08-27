@@ -46,26 +46,26 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define BOOT_HDR_SIZE      16u
-#define BOOT_HDR_MAGIC_0   0x53u /* 'S' */
-#define BOOT_HDR_MAGIC_1   0x43u /* 'C' */
-#define BOOT_HDR_MAGIC_2   0x4Fu /* 'O' */
-#define BOOT_HDR_MAGIC_3   0x53u /* 'S' */
-#define BOOT_HDR_VERSION   1u
+#define BOOT_HDR_SIZE    16u
+#define BOOT_HDR_MAGIC_0 0x53u /* 'S' */
+#define BOOT_HDR_MAGIC_1 0x43u /* 'C' */
+#define BOOT_HDR_MAGIC_2 0x4Fu /* 'O' */
+#define BOOT_HDR_MAGIC_3 0x53u /* 'S' */
+#define BOOT_HDR_VERSION 1u
 
-#define BOOT_STATE_LOADED  0xFFFFu
-#define BOOT_STATE_ACTIVE  0x0000u
+#define BOOT_STATE_LOADED 0xFFFFu
+#define BOOT_STATE_ACTIVE 0x0000u
 
 /* The unit of a LOAD BLOCK command. 128 bytes keeps the whole APDU inside the
  * short-length form with room for the header, and matches the block size used
  * by real loaders. */
-#define BOOT_BLOCK_SIZE    128u
+#define BOOT_BLOCK_SIZE 128u
 
 typedef struct {
-    uint32_t length;      /* image length in bytes                */
-    uint16_t image_crc;   /* CRC-16 over the image                */
-    uint16_t state;       /* BOOT_STATE_*                         */
-    uint16_t version;     /* header version                       */
+    uint32_t length;    /* image length in bytes                */
+    uint16_t image_crc; /* CRC-16 over the image                */
+    uint16_t state;     /* BOOT_STATE_*                         */
+    uint16_t version;   /* header version                       */
 } boot_hdr;
 
 /* Parse the 16 raw bytes. Returns false on bad magic, bad version, or a header

@@ -68,8 +68,8 @@
  */
 typedef enum {
     FDB_ACCEPTED = 0,
-    FDB_MALFORMED,    /* violates the encoding: answer 6A80          */
-    FDB_UNSUPPORTED   /* a valid ISO type we do not implement: 6A81  */
+    FDB_MALFORMED,  /* violates the encoding: answer 6A80          */
+    FDB_UNSUPPORTED /* a valid ISO type we do not implement: 6A81  */
 } fdb_result;
 
 static fdb_result decode_fdb(uint8_t fdb, fs_file_type *out_type)
@@ -147,10 +147,10 @@ static uint16_t parse_fcp(const uint8_t *body, uint16_t body_len,
         return SW_WRONG_DATA;
     }
 
-    bool have_fdb  = false;
-    bool have_fid  = false;
-    bool have_size = false;
-    fs_file_type type = FS_TYPE_FREE;
+    bool         have_fdb  = false;
+    bool         have_fid  = false;
+    bool         have_size = false;
+    fs_file_type type      = FS_TYPE_FREE;
 
     tlv_reader r;
     tlv_reader_init(&r, inner, inner_len);
@@ -169,23 +169,36 @@ static uint16_t parse_fcp(const uint8_t *body, uint16_t body_len,
         uint32_t v = 0u;
         switch (obj.tag) {
         case TAG_FILE_DESC: {
-            if (have_fdb || obj.length != 1u) { return SW_WRONG_DATA; }
+            if (have_fdb || obj.length != 1u) {
+                return SW_WRONG_DATA;
+            }
             const fdb_result fr = decode_fdb(obj.value[0], &type);
-            if (fr == FDB_MALFORMED)   { return SW_WRONG_DATA; }          /* 6A80 */
-            if (fr == FDB_UNSUPPORTED) { return SW_FUNC_NOT_SUPPORTED; }  /* 6A81 */
+            if (fr == FDB_MALFORMED) {
+                return SW_WRONG_DATA;
+            } /* 6A80 */
+            if (fr == FDB_UNSUPPORTED) {
+                return SW_FUNC_NOT_SUPPORTED;
+            } /* 6A81 */
             have_fdb = true;
             break;
         }
 
         case TAG_FILE_ID:
-            if (have_fid || obj.length != 2u) { return SW_WRONG_DATA; }
-            req->file_id = (uint16_t)(((uint16_t)obj.value[0] << 8) | obj.value[1]);
+            if (have_fid || obj.length != 2u) {
+                return SW_WRONG_DATA;
+            }
+            req->file_id =
+                (uint16_t)(((uint16_t)obj.value[0] << 8) | obj.value[1]);
             have_fid = true;
             break;
 
         case TAG_DATA_BYTES:
-            if (have_size) { return SW_WRONG_DATA; }
-            if (tlv_get_uint(&obj, &v) != TLV_OK) { return SW_WRONG_DATA; }
+            if (have_size) {
+                return SW_WRONG_DATA;
+            }
+            if (tlv_get_uint(&obj, &v) != TLV_OK) {
+                return SW_WRONG_DATA;
+            }
             if (v > FS_MAX_EF_SIZE) {
                 /* Distinguished from a malformed template: the request is
                  * well-formed, the card just cannot hold that much. */
@@ -196,13 +209,17 @@ static uint16_t parse_fcp(const uint8_t *body, uint16_t body_len,
              * of range, so it can only confuse a client. Caught HERE rather
              * than in fs_create_file() so the answer is 6A80 (bad data field)
              * and not 6A86 (bad P1-P2) -- the fault really is in the data. */
-            if (v == 0u) { return SW_WRONG_DATA; }
+            if (v == 0u) {
+                return SW_WRONG_DATA;
+            }
             req->size = (uint16_t)v;
             have_size = true;
             break;
 
         case TAG_LIFE_CYCLE:
-            if (obj.length != 1u) { return SW_WRONG_DATA; }
+            if (obj.length != 1u) {
+                return SW_WRONG_DATA;
+            }
             switch ((fs_lifecycle)obj.value[0]) {
             case FS_LC_CREATION:
             case FS_LC_INITIALISED:
@@ -220,16 +237,22 @@ static uint16_t parse_fcp(const uint8_t *body, uint16_t body_len,
             break;
 
         case TAG_SFI:
-            if (obj.length != 1u) { return SW_WRONG_DATA; }
+            if (obj.length != 1u) {
+                return SW_WRONG_DATA;
+            }
             /* ISO puts the SFI in b8..b4 of the value byte, so it is shifted
              * left by 3 -- the same encoding fs_build_fcp emits. b3..b1 are
              * reserved and must be 0. */
-            if ((obj.value[0] & 0x07u) != 0u) { return SW_WRONG_DATA; }
+            if ((obj.value[0] & 0x07u) != 0u) {
+                return SW_WRONG_DATA;
+            }
             req->sfi = (uint8_t)(obj.value[0] >> 3);
             /* 0 encodes "no SFI", which is legal. 31 is out of the 1..30 range
              * ISO defines and cannot be addressed by READ BINARY's 5-bit
              * field, so it is a data error rather than something to clamp. */
-            if (req->sfi > 30u) { return SW_WRONG_DATA; }
+            if (req->sfi > 30u) {
+                return SW_WRONG_DATA;
+            }
             break;
 
         default:

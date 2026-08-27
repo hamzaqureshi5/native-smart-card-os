@@ -21,7 +21,7 @@ static void ensure_card(void)
     }
     vcard_config cfg;
     vcard_config_default(&cfg);
-    cfg.state_dir = NULL;   /* in-RAM NVM: hermetic, no files */
+    cfg.state_dir = NULL; /* in-RAM NVM: hermetic, no files */
     cfg.quiet     = true;
     vcard_configure(&cfg);
     if (vcard_power_on() != HAL_OK) {
@@ -48,10 +48,10 @@ int scos_fuzz_command(const uint8_t *data, size_t size)
         rsp[i] = 0xA5u;
     }
 
-    const scos_status st = scos_process(&g_card, data, (uint16_t)size,
-                                        rsp, (uint16_t)sizeof(rsp), &rsp_len);
+    const scos_status st = scos_process(&g_card, data, (uint16_t)size, rsp,
+                                        (uint16_t)sizeof(rsp), &rsp_len);
     if (st != SCOS_OK) {
-        __builtin_trap();   /* a valid buffer must always be serviceable */
+        __builtin_trap(); /* a valid buffer must always be serviceable */
     }
 
     /* THE core invariant: always a well-formed response. */
@@ -60,7 +60,7 @@ int scos_fuzz_command(const uint8_t *data, size_t size)
     }
     const uint8_t sw1 = rsp[rsp_len - 2u];
     if ((sw1 & 0xF0u) != 0x60u && (sw1 & 0xF0u) != 0x90u) {
-        __builtin_trap();   /* not a valid ISO status class */
+        __builtin_trap(); /* not a valid ISO status class */
     }
 
     /* The filesystem must still be structurally intact: the MF is always slot

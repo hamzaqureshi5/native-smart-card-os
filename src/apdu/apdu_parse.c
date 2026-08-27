@@ -86,12 +86,12 @@ apdu_parse_status apdu_parse(const uint8_t *buf, uint16_t len,
 
     if (total == case4_len) {
         const uint8_t le_byte = buf[case4_len - 1u];
-        out->acase      = APDU_CASE_4;
-        out->lc         = (uint16_t)lc;
-        out->data       = &buf[APDU_HEADER_LEN + 1u];
-        out->le_present = true;
-        out->le = (le_byte == 0u) ? (uint16_t)APDU_SHORT_LE_MAX
-                                  : (uint16_t)le_byte;
+        out->acase            = APDU_CASE_4;
+        out->lc               = (uint16_t)lc;
+        out->data             = &buf[APDU_HEADER_LEN + 1u];
+        out->le_present       = true;
+        out->le =
+            (le_byte == 0u) ? (uint16_t)APDU_SHORT_LE_MAX : (uint16_t)le_byte;
         return APDU_PARSE_OK;
     }
 
@@ -161,13 +161,13 @@ uint16_t apdu_cla_status_sw(apdu_cla_status st)
     case APDU_CLA_OK:
         return SW_OK;
     case APDU_CLA_CHANNEL_UNSUPPORTED:
-        return SW_LOGICAL_CHANNEL_NOT_SUPPORTED;  /* 6881 */
+        return SW_LOGICAL_CHANNEL_NOT_SUPPORTED; /* 6881 */
     case APDU_CLA_SM_UNSUPPORTED:
         return SW_SECURE_MESSAGING_NOT_SUPPORTED; /* 6882 */
     case APDU_CLA_CHAINING_UNSUPPORTED:
-        return SW_CHAINING_NOT_SUPPORTED;         /* 6884 */
+        return SW_CHAINING_NOT_SUPPORTED; /* 6884 */
     case APDU_CLA_INVALID:
     default:
-        return SW_CLA_NOT_SUPPORTED;              /* 6E00 */
+        return SW_CLA_NOT_SUPPORTED; /* 6E00 */
     }
 }

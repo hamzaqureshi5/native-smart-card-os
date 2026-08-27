@@ -41,13 +41,19 @@ static uint8_t *region_base(hal_nvm_region region, uint32_t *out_size)
 {
     switch (region) {
     case HAL_NVM_EEPROM:
-        if (out_size != NULL) { *out_size = SCV1_EEPROM_SIZE; }
+        if (out_size != NULL) {
+            *out_size = SCV1_EEPROM_SIZE;
+        }
         return _eeprom_base;
     case HAL_NVM_FLASH:
-        if (out_size != NULL) { *out_size = SCV1_DFLASH_SIZE; }
+        if (out_size != NULL) {
+            *out_size = SCV1_DFLASH_SIZE;
+        }
         return _dflash_base;
     default:
-        if (out_size != NULL) { *out_size = 0u; }
+        if (out_size != NULL) {
+            *out_size = 0u;
+        }
         return NULL;
     }
 }
@@ -62,9 +68,12 @@ uint32_t hal_nvm_size(hal_nvm_region region)
 uint32_t hal_nvm_page_size(hal_nvm_region region)
 {
     switch (region) {
-    case HAL_NVM_EEPROM: return SCV1_EEPROM_PAGE;
-    case HAL_NVM_FLASH:  return SCV1_DFLASH_PAGE;
-    default:             return 0u;
+    case HAL_NVM_EEPROM:
+        return SCV1_EEPROM_PAGE;
+    case HAL_NVM_FLASH:
+        return SCV1_DFLASH_PAGE;
+    default:
+        return 0u;
     }
 }
 
@@ -79,17 +88,27 @@ static bool in_range(uint32_t size, uint32_t offset, uint32_t len)
     return end <= (uint64_t)size;
 }
 
-hal_status hal_nvm_read(hal_nvm_region region, uint32_t offset,
-                        void *dst, uint32_t len)
+hal_status hal_nvm_read(hal_nvm_region region, uint32_t offset, void *dst,
+                        uint32_t len)
 {
-    if (dst == NULL) { return HAL_ERR_PARAM; }
-    if (len == 0u)   { return HAL_OK; }
-    if (!s_powered)  { return HAL_ERR_POWER; }
+    if (dst == NULL) {
+        return HAL_ERR_PARAM;
+    }
+    if (len == 0u) {
+        return HAL_OK;
+    }
+    if (!s_powered) {
+        return HAL_ERR_POWER;
+    }
 
-    uint32_t size = 0u;
+    uint32_t       size = 0u;
     const uint8_t *base = region_base(region, &size);
-    if (base == NULL) { return HAL_ERR_PARAM; }
-    if (!in_range(size, offset, len)) { return HAL_ERR_RANGE; }
+    if (base == NULL) {
+        return HAL_ERR_PARAM;
+    }
+    if (!in_range(size, offset, len)) {
+        return HAL_ERR_RANGE;
+    }
 
     if (!os_memcpy_checked(dst, len, base + offset, len)) {
         return HAL_ERR_IO;
@@ -100,14 +119,24 @@ hal_status hal_nvm_read(hal_nvm_region region, uint32_t offset,
 hal_status hal_nvm_write(hal_nvm_region region, uint32_t offset,
                          const void *src, uint32_t len)
 {
-    if (src == NULL) { return HAL_ERR_PARAM; }
-    if (len == 0u)   { return HAL_OK; }
-    if (!s_powered)  { return HAL_ERR_POWER; }
+    if (src == NULL) {
+        return HAL_ERR_PARAM;
+    }
+    if (len == 0u) {
+        return HAL_OK;
+    }
+    if (!s_powered) {
+        return HAL_ERR_POWER;
+    }
 
     uint32_t size = 0u;
     uint8_t *base = region_base(region, &size);
-    if (base == NULL) { return HAL_ERR_PARAM; }
-    if (!in_range(size, offset, len)) { return HAL_ERR_RANGE; }
+    if (base == NULL) {
+        return HAL_ERR_PARAM;
+    }
+    if (!in_range(size, offset, len)) {
+        return HAL_ERR_RANGE;
+    }
 
     if (!os_memcpy_checked(base + offset, len, src, len)) {
         return HAL_ERR_IO;
@@ -117,7 +146,9 @@ hal_status hal_nvm_write(hal_nvm_region region, uint32_t offset,
 
 hal_status hal_nvm_sync(void)
 {
-    if (!s_powered) { return HAL_ERR_POWER; }
+    if (!s_powered) {
+        return HAL_ERR_POWER;
+    }
     /* SRAM-backed on this target, so writes are already durable within the
      * device. A real flash controller would block here until programming
      * completed and report a failure it could not retry. */
@@ -201,7 +232,7 @@ void scv1_nvm_power_off(void)
         return;
     }
     if (semihost_available()) {
-        uint32_t esize = 0u, fsize = 0u;
+        uint32_t       esize = 0u, fsize = 0u;
         const uint8_t *eeprom = region_base(HAL_NVM_EEPROM, &esize);
         const uint8_t *dflash = region_base(HAL_NVM_FLASH, &fsize);
         (void)semihost_store(EEPROM_IMAGE, eeprom, esize);

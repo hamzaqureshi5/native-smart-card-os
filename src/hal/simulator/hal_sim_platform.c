@@ -11,9 +11,7 @@
 /* ---------------------------------------------------------- lifecycle ---- */
 
 hal_status hal_init(void)
-{
-    return vcard_power_on();
-}
+{ return vcard_power_on(); }
 
 void hal_reset(void)
 {
@@ -23,9 +21,7 @@ void hal_reset(void)
 }
 
 void hal_shutdown(void)
-{
-    vcard_power_off();
-}
+{ vcard_power_off(); }
 
 /* -------------------------------------------------------------- entropy -- */
 

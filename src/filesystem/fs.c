@@ -18,14 +18,13 @@
  * requires a search, and a corrupt slot 0 is immediately recognisable. */
 #define FS_ROOT_INDEX 0u
 
-uint16_t fs_root_index(void) { return FS_ROOT_INDEX; }
+uint16_t fs_root_index(void)
+{ return FS_ROOT_INDEX; }
 
 /* ------------------------------------------------------------ inspection --- */
 
 fs_status fs_get(uint16_t index, fs_descriptor *out)
-{
-    return fs_store_read_desc(index, out);
-}
+{ return fs_store_read_desc(index, out); }
 
 fs_status fs_find_child(uint16_t parent, uint16_t file_id, uint16_t *out_index)
 {
@@ -36,7 +35,7 @@ fs_status fs_find_child(uint16_t parent, uint16_t file_id, uint16_t *out_index)
 
     const uint16_t n = fs_store_max_files();
     for (uint16_t i = 0; i < n; i++) {
-        fs_descriptor d;
+        fs_descriptor   d;
         const fs_status st = fs_store_read_desc(i, &d);
         if (st == FS_ERR_NOT_FOUND) {
             continue; /* free slot */
@@ -85,8 +84,8 @@ fs_status fs_find_by_sfi(uint16_t df, uint8_t sfi, uint16_t *out_index)
 
 uint16_t fs_child_count(uint16_t parent)
 {
-    uint16_t count = 0u;
-    const uint16_t n = fs_store_max_files();
+    uint16_t       count = 0u;
+    const uint16_t n     = fs_store_max_files();
     for (uint16_t i = 0; i < n; i++) {
         fs_descriptor d;
         if (fs_store_read_desc(i, &d) != FS_OK) {
@@ -218,13 +217,13 @@ static fs_status select_child_typed(fs_selection *sel, uint16_t file_id,
     if (sel == NULL) {
         return FS_ERR_PARAM;
     }
-    uint16_t index = FS_INVALID_INDEX;
-    const fs_status find = fs_find_child(sel->cur_df, file_id, &index);
+    uint16_t        index = FS_INVALID_INDEX;
+    const fs_status find  = fs_find_child(sel->cur_df, file_id, &index);
     if (find != FS_OK) {
         return find;
     }
 
-    fs_descriptor d;
+    fs_descriptor   d;
     const fs_status st = resolve(index, &d);
     if (st != FS_OK) {
         return st;
@@ -237,21 +236,17 @@ static fs_status select_child_typed(fs_selection *sel, uint16_t file_id,
 }
 
 fs_status fs_select_child_df(fs_selection *sel, uint16_t file_id)
-{
-    return select_child_typed(sel, file_id, true);
-}
+{ return select_child_typed(sel, file_id, true); }
 
 fs_status fs_select_child_ef(fs_selection *sel, uint16_t file_id)
-{
-    return select_child_typed(sel, file_id, false);
-}
+{ return select_child_typed(sel, file_id, false); }
 
 fs_status fs_select_parent(fs_selection *sel)
 {
     if (sel == NULL) {
         return FS_ERR_PARAM;
     }
-    fs_descriptor cur;
+    fs_descriptor   cur;
     const fs_status st = fs_store_read_desc(sel->cur_df, &cur);
     if (st != FS_OK) {
         return st;
@@ -262,7 +257,7 @@ fs_status fs_select_parent(fs_selection *sel)
         return FS_ERR_NOT_FOUND;
     }
 
-    fs_descriptor parent;
+    fs_descriptor   parent;
     const fs_status pst = resolve(cur.parent, &parent);
     if (pst != FS_OK) {
         return pst;
@@ -317,7 +312,7 @@ fs_status fs_select_by_path(fs_selection *sel, const uint8_t *path,
         if (fs_find_child(scratch.cur_df, fid, &index) != FS_OK) {
             return FS_ERR_NOT_FOUND;
         }
-        fs_descriptor d;
+        fs_descriptor   d;
         const fs_status st = resolve(index, &d);
         if (st != FS_OK) {
             return st;
@@ -345,7 +340,7 @@ fs_status fs_ef_read(uint16_t index, uint16_t offset, uint16_t len,
     }
     *out_read = 0u;
 
-    fs_descriptor d;
+    fs_descriptor   d;
     const fs_status st = resolve(index, &d);
     if (st != FS_OK) {
         return st;
@@ -386,7 +381,7 @@ fs_status fs_ef_write(uint16_t index, uint16_t offset, uint16_t len,
         return FS_OK;
     }
 
-    fs_descriptor d;
+    fs_descriptor   d;
     const fs_status st = resolve(index, &d);
     if (st != FS_OK) {
         return st;
@@ -520,7 +515,7 @@ fs_status fs_personalise(void)
     mf.lifecycle = FS_LC_ACTIVATED;
     mf.parent    = FS_NO_PARENT;
     mf.sfi       = FS_NO_SFI;
-    st = fs_store_write_desc(0u, &mf);
+    st           = fs_store_write_desc(0u, &mf);
     if (st != FS_OK) {
         return st;
     }
@@ -536,7 +531,7 @@ fs_status fs_personalise(void)
         uint8_t      sfi;
     } const layout[] = {
         { 1u, 0x2F00u, FS_TYPE_EF_TRANSPARENT, 0u, 32u, 1u },
-        { 2u, 0x7F10u, FS_TYPE_DF,             0u,  0u, 0u },
+        { 2u, 0x7F10u, FS_TYPE_DF, 0u, 0u, 0u },
         { 3u, 0x6F01u, FS_TYPE_EF_TRANSPARENT, 2u, 64u, 1u },
         { 4u, 0x6F02u, FS_TYPE_EF_TRANSPARENT, 2u, 16u, 2u },
     };
@@ -553,7 +548,7 @@ fs_status fs_personalise(void)
 
         if (layout[i].type == FS_TYPE_EF_TRANSPARENT) {
             uint32_t offset = 0u;
-            st = fs_store_alloc_data(layout[i].size, &offset);
+            st              = fs_store_alloc_data(layout[i].size, &offset);
             if (st != FS_OK) {
                 return st;
             }
@@ -578,7 +573,7 @@ fs_status fs_init(void)
     if (st == FS_OK) {
         /* Mounted an existing image. Sanity-check that slot 0 really is the MF
          * before trusting the tree -- everything navigates from there. */
-        fs_descriptor mf;
+        fs_descriptor   mf;
         const fs_status rst = fs_store_read_desc(FS_ROOT_INDEX, &mf);
         if (rst != FS_OK) {
             return (rst == FS_ERR_NOT_FOUND) ? FS_ERR_CORRUPT : rst;
@@ -615,9 +610,7 @@ fs_status fs_init(void)
  * unambiguously selected.
  */
 static bool fid_is_reserved(uint16_t fid)
-{
-    return fid == FS_FID_MF || fid == 0xFFFFu;
-}
+{ return fid == FS_FID_MF || fid == 0xFFFFu; }
 
 fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
                          uint16_t *out_index)
@@ -716,7 +709,7 @@ fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
 
     if (req->type == FS_TYPE_EF_TRANSPARENT) {
         uint32_t offset = 0u;
-        st = fs_store_alloc_data(req->size, &offset);
+        st              = fs_store_alloc_data(req->size, &offset);
         if (st != FS_OK) {
             /* Out of data space. The descriptor slot was never written, so
              * nothing needs undoing -- which is exactly why the allocation

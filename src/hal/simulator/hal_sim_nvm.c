@@ -20,9 +20,7 @@ uint32_t hal_nvm_size(hal_nvm_region region)
 }
 
 uint32_t hal_nvm_page_size(hal_nvm_region region)
-{
-    return vcard_nvm_page(region);
-}
+{ return vcard_nvm_page(region); }
 
 /* Shared bounds check. offset + len is computed in uint64_t so that a hostile
  * (offset=0xFFFFFFF0, len=0x20) cannot wrap to a small number and pass. */
@@ -32,8 +30,8 @@ static bool in_range(uint32_t size, uint32_t offset, uint32_t len)
     return end <= (uint64_t)size;
 }
 
-hal_status hal_nvm_read(hal_nvm_region region, uint32_t offset,
-                        void *dst, uint32_t len)
+hal_status hal_nvm_read(hal_nvm_region region, uint32_t offset, void *dst,
+                        uint32_t len)
 {
     if (dst == NULL) {
         return HAL_ERR_PARAM;
@@ -45,7 +43,7 @@ hal_status hal_nvm_read(hal_nvm_region region, uint32_t offset,
         return HAL_ERR_POWER;
     }
 
-    uint32_t size = 0u;
+    uint32_t       size = 0u;
     const uint8_t *base = vcard_nvm_base(region, &size);
     if (base == NULL) {
         return HAL_ERR_PARAM;

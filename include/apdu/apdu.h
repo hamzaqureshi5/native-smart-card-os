@@ -32,7 +32,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define APDU_HEADER_LEN     4u
+#define APDU_HEADER_LEN   4u
 #define APDU_SHORT_LC_MAX 255u
 #define APDU_SHORT_LE_MAX 256u
 
@@ -44,20 +44,20 @@ typedef enum {
 } apdu_case;
 
 typedef struct {
-    uint8_t  cla;
-    uint8_t  ins;
-    uint8_t  p1;
-    uint8_t  p2;
+    uint8_t cla;
+    uint8_t ins;
+    uint8_t p1;
+    uint8_t p2;
 
     /* Command data field. Points INTO the caller's receive buffer -- the
      * parser copies nothing. Valid only while that buffer lives, and only if
      * lc > 0; NULL otherwise. */
     const uint8_t *data;
-    uint16_t lc;         /* 0..255 for short APDUs                          */
+    uint16_t       lc; /* 0..255 for short APDUs                          */
 
     /* Expected response length. Only meaningful when le_present is true.
      * Already normalised: a wire value of 0x00 arrives here as 256. */
-    uint16_t le;         /* 1..256                                          */
+    uint16_t le; /* 1..256                                          */
     bool     le_present;
 
     apdu_case acase;
@@ -65,9 +65,9 @@ typedef struct {
 
 typedef enum {
     APDU_PARSE_OK = 0,
-    APDU_PARSE_TOO_SHORT,     /* fewer than 4 bytes: not even a header       */
-    APDU_PARSE_BAD_LENGTH,    /* Lc disagrees with the bytes actually present */
-    APDU_PARSE_EXTENDED       /* extended-length APDU; not supported yet      */
+    APDU_PARSE_TOO_SHORT,  /* fewer than 4 bytes: not even a header       */
+    APDU_PARSE_BAD_LENGTH, /* Lc disagrees with the bytes actually present */
+    APDU_PARSE_EXTENDED    /* extended-length APDU; not supported yet      */
 } apdu_parse_status;
 
 /* Parse buf[0..len) into *out. Never writes outside *out, never reads outside
@@ -82,18 +82,18 @@ uint16_t apdu_parse_status_sw(apdu_parse_status st);
 /* ----------------------------------------------------------------- CLA rules */
 
 typedef enum {
-    APDU_CLA_OK = 0,             /* first interindustry, channel 0, no SM     */
-    APDU_CLA_INVALID,            /* 0xFF, or a class we do not implement      */
-    APDU_CLA_CHANNEL_UNSUPPORTED,/* logical channel != 0                      */
-    APDU_CLA_SM_UNSUPPORTED,     /* secure messaging bits set                 */
-    APDU_CLA_CHAINING_UNSUPPORTED/* command-chaining bit set                  */
+    APDU_CLA_OK = 0,  /* first interindustry, channel 0, no SM     */
+    APDU_CLA_INVALID, /* 0xFF, or a class we do not implement      */
+    APDU_CLA_CHANNEL_UNSUPPORTED, /* logical channel != 0                      */
+    APDU_CLA_SM_UNSUPPORTED, /* secure messaging bits set                 */
+    APDU_CLA_CHAINING_UNSUPPORTED /* command-chaining bit set                  */
 } apdu_cla_status;
 
 /* Classify CLA per ISO/IEC 7816-4 s.5.4.1. This milestone accepts only
  * CLA==0x00 and reports precisely why anything else was rejected, so the
  * status word we return is diagnostic rather than a blanket 6E00. */
 apdu_cla_status apdu_check_cla(uint8_t cla);
-uint16_t apdu_cla_status_sw(apdu_cla_status st);
+uint16_t        apdu_cla_status_sw(apdu_cla_status st);
 
 /* --------------------------------------------------------- response builder */
 

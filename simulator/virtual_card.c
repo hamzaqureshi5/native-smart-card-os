@@ -27,12 +27,12 @@
 #include <string.h>
 
 #if defined(_WIN32)
-#  include <direct.h>
-#  define VCARD_MKDIR(p) _mkdir(p)
+#include <direct.h>
+#define VCARD_MKDIR(p) _mkdir(p)
 #else
-#  include <sys/stat.h>
-#  include <sys/types.h>
-#  define VCARD_MKDIR(p) mkdir((p), 0700)
+#include <sys/stat.h>
+#include <sys/types.h>
+#define VCARD_MKDIR(p) mkdir((p), 0700)
 #endif
 
 /* --- virtual memory ------------------------------------------------------ */
@@ -139,8 +139,8 @@ static void path_join(char *out, size_t cap, const char *dir, const char *name)
     (void)snprintf(out, cap, "%s/%s", dir, name);
 }
 
-static void region_load(const char *dir, const char *name,
-                        uint8_t *buf, uint32_t size)
+static void region_load(const char *dir, const char *name, uint8_t *buf,
+                        uint32_t size)
 {
     char path[512];
     path_join(path, sizeof(path), dir, name);
@@ -162,8 +162,8 @@ static void region_load(const char *dir, const char *name,
     }
 }
 
-static void region_store(const char *dir, const char *name,
-                         const uint8_t *buf, uint32_t size)
+static void region_store(const char *dir, const char *name, const uint8_t *buf,
+                         uint32_t size)
 {
     char path[512];
     path_join(path, sizeof(path), dir, name);
@@ -187,10 +187,10 @@ hal_status vcard_power_on(void)
     if (c->state_dir != NULL) {
         (void)VCARD_MKDIR(c->state_dir); /* may already exist; that is fine */
         region_load(c->state_dir, "card_eeprom.bin", s_eeprom, c->eeprom_size);
-        region_load(c->state_dir, "card_flash.bin",  s_flash,  c->flash_size);
+        region_load(c->state_dir, "card_flash.bin", s_flash, c->flash_size);
     } else {
         memset(s_eeprom, 0xFF, c->eeprom_size);
-        memset(s_flash,  0xFF, c->flash_size);
+        memset(s_flash, 0xFF, c->flash_size);
     }
 
     /* RAM is deliberately NOT restored. That is the whole point of RAM: a
@@ -208,12 +208,13 @@ void vcard_power_off(void)
     const vcard_config *c = cfg();
     if (s_power == VCARD_POWER_ON && c->state_dir != NULL) {
         region_store(c->state_dir, "card_eeprom.bin", s_eeprom, c->eeprom_size);
-        region_store(c->state_dir, "card_flash.bin",  s_flash,  c->flash_size);
+        region_store(c->state_dir, "card_flash.bin", s_flash, c->flash_size);
     }
     s_power = VCARD_POWER_OFF;
 }
 
-vcard_power vcard_power_get(void) { return s_power; }
+vcard_power vcard_power_get(void)
+{ return s_power; }
 
 /* --------------------------------------------------------------- NVM ----- */
 
@@ -222,13 +223,19 @@ uint8_t *vcard_nvm_base(hal_nvm_region region, uint32_t *out_size)
     const vcard_config *c = cfg();
     switch (region) {
     case HAL_NVM_EEPROM:
-        if (out_size != NULL) { *out_size = c->eeprom_size; }
+        if (out_size != NULL) {
+            *out_size = c->eeprom_size;
+        }
         return s_eeprom;
     case HAL_NVM_FLASH:
-        if (out_size != NULL) { *out_size = c->flash_size; }
+        if (out_size != NULL) {
+            *out_size = c->flash_size;
+        }
         return s_flash;
     default:
-        if (out_size != NULL) { *out_size = 0u; }
+        if (out_size != NULL) {
+            *out_size = 0u;
+        }
         return NULL;
     }
 }
@@ -236,9 +243,12 @@ uint8_t *vcard_nvm_base(hal_nvm_region region, uint32_t *out_size)
 uint32_t vcard_nvm_page(hal_nvm_region region)
 {
     switch (region) {
-    case HAL_NVM_EEPROM: return VCARD_EEPROM_PAGE;
-    case HAL_NVM_FLASH:  return VCARD_FLASH_PAGE;
-    default:             return 0u;
+    case HAL_NVM_EEPROM:
+        return VCARD_EEPROM_PAGE;
+    case HAL_NVM_FLASH:
+        return VCARD_FLASH_PAGE;
+    default:
+        return 0u;
     }
 }
 
@@ -280,11 +290,10 @@ void vcard_print_banner(void)
                   "ROM:     %u KB   (budget; checked against the build)\n"
                   "EEPROM:  %u KB   page %u B\n"
                   "FLASH:   %u KB   page %u B\n",
-                  SCOS_VERSION_STRING,
-                  (unsigned)SCOS_RAM_KB,
-                  (unsigned)SCOS_ROM_KB,
-                  (unsigned)(c->eeprom_size / 1024u), VCARD_EEPROM_PAGE,
-                  (unsigned)(c->flash_size / 1024u),  VCARD_FLASH_PAGE);
+                  SCOS_VERSION_STRING, (unsigned)SCOS_RAM_KB,
+                  (unsigned)SCOS_ROM_KB, (unsigned)(c->eeprom_size / 1024u),
+                  VCARD_EEPROM_PAGE, (unsigned)(c->flash_size / 1024u),
+                  VCARD_FLASH_PAGE);
 
     (void)fprintf(stderr, "State:   %s\n",
                   (c->state_dir != NULL) ? c->state_dir

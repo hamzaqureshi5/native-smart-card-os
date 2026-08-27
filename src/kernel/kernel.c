@@ -61,8 +61,7 @@ void scos_reset(scos_kernel *k)
     k->lifecycle = SCOS_LC_OPERATIONAL;
 }
 
-scos_status scos_process(scos_kernel *k,
-                         const uint8_t *cmd, uint16_t cmd_len,
+scos_status scos_process(scos_kernel *k, const uint8_t *cmd, uint16_t cmd_len,
                          uint8_t *rsp, uint16_t rsp_cap, uint16_t *rsp_len)
 {
     if (k == NULL || rsp == NULL || rsp_len == NULL || rsp_cap < 2u) {
@@ -94,7 +93,7 @@ scos_status scos_process(scos_kernel *k,
     }
 
     /* --- 1. structural parse ------------------------------------------- */
-    apdu_command c;
+    apdu_command            c;
     const apdu_parse_status pst = apdu_parse(cmd, cmd_len, &c);
     if (pst != APDU_PARSE_OK) {
         *rsp_len = apdu_rsp_finish(&r, apdu_parse_status_sw(pst));

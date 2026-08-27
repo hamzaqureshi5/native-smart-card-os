@@ -74,15 +74,15 @@
 #define BOOT_STATUS_RSP_LEN 16u
 
 typedef enum {
-    BOOT_SLOT_BLANK = 0,  /* no header: a fresh or freshly erased part      */
-    BOOT_SLOT_LOADED,     /* header valid, image CRC good, not activated    */
-    BOOT_SLOT_ACTIVE,     /* header valid, image CRC good, activated        */
-    BOOT_SLOT_DAMAGED     /* header present but self-inconsistent           */
+    BOOT_SLOT_BLANK = 0, /* no header: a fresh or freshly erased part      */
+    BOOT_SLOT_LOADED,    /* header valid, image CRC good, not activated    */
+    BOOT_SLOT_ACTIVE,    /* header valid, image CRC good, activated        */
+    BOOT_SLOT_DAMAGED    /* header present but self-inconsistent           */
 } boot_slot_state;
 
 typedef enum {
     BOOT_ACT_NONE = 0,
-    BOOT_ACT_RESTART      /* caller should re-run the boot decision         */
+    BOOT_ACT_RESTART /* caller should re-run the boot decision         */
 } boot_action;
 
 typedef struct {
@@ -95,19 +95,16 @@ typedef struct {
      * address. Used only by the plausibility check -- see boot_image_plausible.
      * The unit tests pass the same SCV1 values, so the test and the chip agree
      * on what a well-formed image looks like. */
-    uint32_t load_addr;   /* address OSFLASH is mapped at                   */
+    uint32_t load_addr; /* address OSFLASH is mapped at                   */
     uint32_t sram_base;
     uint32_t sram_size;
-    uint32_t high_water;  /* highest offset+length written since ERASE      */
-    bool     erased;      /* ERASE issued since reset                       */
+    uint32_t high_water; /* highest offset+length written since ERASE      */
+    bool     erased;     /* ERASE issued since reset                       */
 } boot_ctx;
 
-void boot_ctx_init(boot_ctx *ctx,
-                   uint8_t *osflash, uint32_t osflash_size,
-                   uint8_t *oshdr,   uint32_t oshdr_size,
-                   uint32_t page_size,
-                   uint32_t load_addr,
-                   uint32_t sram_base, uint32_t sram_size);
+void boot_ctx_init(boot_ctx *ctx, uint8_t *osflash, uint32_t osflash_size,
+                   uint8_t *oshdr, uint32_t oshdr_size, uint32_t page_size,
+                   uint32_t load_addr, uint32_t sram_base, uint32_t sram_size);
 
 /*
  * Handle one command APDU. Returns the status word; never returns 0x0000.
@@ -116,8 +113,7 @@ void boot_ctx_init(boot_ctx *ctx,
  * -- the caller appends SW1 SW2, exactly as the OS's dispatcher does, so the
  * transport layer stays the single place that knows the framing.
  */
-uint16_t boot_handle(boot_ctx *ctx,
-                     const uint8_t *cmd, uint32_t len,
+uint16_t boot_handle(boot_ctx *ctx, const uint8_t *cmd, uint32_t len,
                      uint8_t *rsp, uint32_t rsp_cap, uint32_t *rsp_len,
                      boot_action *action);
 
@@ -142,8 +138,7 @@ boot_slot_state boot_slot_check(const uint8_t *oshdr, uint32_t oshdr_size,
  * Both words are little-endian in the image. Read byte-wise so this function
  * gives the same answer on the host as on the chip.
  */
-bool boot_image_plausible(const uint8_t *img, uint32_t len,
-                          uint32_t load_addr,
+bool boot_image_plausible(const uint8_t *img, uint32_t len, uint32_t load_addr,
                           uint32_t sram_base, uint32_t sram_size);
 
 #endif /* BOOT_LOADER_H */

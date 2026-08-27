@@ -28,10 +28,10 @@
 #include "os/scos_config.h"
 
 typedef enum {
-    SCOS_OK = 0,
-    SCOS_ERR_PARAM   = -1,
-    SCOS_ERR_STATE   = -2, /* called in the wrong lifecycle state */
-    SCOS_ERR_HAL     = -3
+    SCOS_OK        = 0,
+    SCOS_ERR_PARAM = -1,
+    SCOS_ERR_STATE = -2, /* called in the wrong lifecycle state */
+    SCOS_ERR_HAL   = -3
 } scos_status;
 
 /* Card lifecycle. Mirrors the coarse ISO 7816-4 / GlobalPlatform notion of a
@@ -40,8 +40,8 @@ typedef enum {
     SCOS_LC_NO_POWER = 0,
     SCOS_LC_INITIALISING,
     SCOS_LC_OPERATIONAL,
-    SCOS_LC_FS_ERROR,   /* filesystem unreadable: answers only with 6581 */
-    SCOS_LC_TERMINATED  /* unrecoverable; answers only with 6985 */
+    SCOS_LC_FS_ERROR,  /* filesystem unreadable: answers only with 6581 */
+    SCOS_LC_TERMINATED /* unrecoverable; answers only with 6985 */
 } scos_lifecycle;
 
 /*
@@ -96,8 +96,7 @@ void scos_reset(scos_kernel *k);
  *   - Never reads outside cmd[0..cmd_len) or writes outside rsp[0..rsp_cap).
  *   - Never returns SCOS_OK without writing a status word.
  */
-scos_status scos_process(scos_kernel *k,
-                         const uint8_t *cmd, uint16_t cmd_len,
+scos_status scos_process(scos_kernel *k, const uint8_t *cmd, uint16_t cmd_len,
                          uint8_t *rsp, uint16_t rsp_cap, uint16_t *rsp_len);
 
 /* Receive/execute/respond until the reader disconnects. Uses only hal_card_*,

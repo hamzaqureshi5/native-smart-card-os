@@ -132,8 +132,8 @@ static uint16_t send(const uint8_t *cmd, uint16_t len)
     uint8_t  rsp[SCOS_APDU_RSP_MAX];
     uint16_t rsp_len = 0u;
 
-    if (scos_process(&g_card, cmd, len, rsp, (uint16_t)sizeof(rsp), &rsp_len)
-        != SCOS_OK) {
+    if (scos_process(&g_card, cmd, len, rsp, (uint16_t)sizeof(rsp), &rsp_len) !=
+        SCOS_OK) {
         return 0u;
     }
     assert(rsp_len >= 2u);
@@ -184,13 +184,13 @@ static uint16_t build_create(uint8_t *out, const uint8_t *in)
     }
 
     uint16_t m = 0u;
-    out[m++] = 0x00u;
-    out[m++] = 0xE0u;
-    out[m++] = 0x00u;
-    out[m++] = 0x00u;
-    out[m++] = (uint8_t)(n + 2u);
-    out[m++] = 0x62u;
-    out[m++] = n;
+    out[m++]   = 0x00u;
+    out[m++]   = 0xE0u;
+    out[m++]   = 0x00u;
+    out[m++]   = 0x00u;
+    out[m++]   = (uint8_t)(n + 2u);
+    out[m++]   = 0x62u;
+    out[m++]   = n;
     for (uint8_t i = 0; i < n; i++) {
         out[m++] = inner[i];
     }
@@ -213,8 +213,8 @@ int scos_fuzz_fcp(const uint8_t *data, size_t size)
     size_t pos = 0;
     while (pos + 4u <= size) {
         const uint8_t op = data[pos] & 0x07u;
-        uint8_t  cmd[64];
-        uint16_t len = 0u;
+        uint8_t       cmd[64];
+        uint16_t      len = 0u;
 
         switch (op) {
         case 0u:
@@ -226,29 +226,41 @@ int scos_fuzz_fcp(const uint8_t *data, size_t size)
         case 4u:
         case 5u:
             /* DELETE FILE of an identifier drawn from the input. */
-            cmd[0] = 0x00u; cmd[1] = 0xE4u; cmd[2] = 0x00u; cmd[3] = 0x00u;
-            cmd[4] = 0x02u; cmd[5] = data[pos + 1u]; cmd[6] = data[pos + 2u];
-            len = 7u;
+            cmd[0] = 0x00u;
+            cmd[1] = 0xE4u;
+            cmd[2] = 0x00u;
+            cmd[3] = 0x00u;
+            cmd[4] = 0x02u;
+            cmd[5] = data[pos + 1u];
+            cmd[6] = data[pos + 2u];
+            len    = 7u;
             break;
         case 6u:
             /* SELECT, so the current DF moves and later creates land in
              * different parents -- otherwise everything is a child of the MF
              * and invariants 4-6 barely get tested. */
-            cmd[0] = 0x00u; cmd[1] = 0xA4u;
+            cmd[0] = 0x00u;
+            cmd[1] = 0xA4u;
             cmd[2] = (uint8_t)(data[pos + 3u] % 4u); /* P1 00/01/02/03 */
             cmd[3] = 0x0Cu;
-            cmd[4] = 0x02u; cmd[5] = data[pos + 1u]; cmd[6] = data[pos + 2u];
-            len = 7u;
+            cmd[4] = 0x02u;
+            cmd[5] = data[pos + 1u];
+            cmd[6] = data[pos + 2u];
+            len    = 7u;
             break;
         default:
             /* UPDATE BINARY, to prove invariant 6 is not merely bookkeeping:
              * if two EFs overlapped, writing here would corrupt the other. */
-            cmd[0] = 0x00u; cmd[1] = 0xD6u;
-            cmd[2] = 0x00u; cmd[3] = data[pos + 1u];
+            cmd[0] = 0x00u;
+            cmd[1] = 0xD6u;
+            cmd[2] = 0x00u;
+            cmd[3] = data[pos + 1u];
             cmd[4] = 0x04u;
-            cmd[5] = data[pos + 2u]; cmd[6] = data[pos + 3u];
-            cmd[7] = 0xA5u;          cmd[8] = 0x5Au;
-            len = 9u;
+            cmd[5] = data[pos + 2u];
+            cmd[6] = data[pos + 3u];
+            cmd[7] = 0xA5u;
+            cmd[8] = 0x5Au;
+            len    = 9u;
             break;
         }
         pos += 4u;

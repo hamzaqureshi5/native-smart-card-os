@@ -41,9 +41,9 @@ static void fault_halt(const char *what)
     /* Written directly to the UART: no buffering, no allocation, nothing that
      * could itself fail. We may be running on a corrupted stack. */
     SCV1_UART_CTRL = SCV1_UART_CTRL_TX_EN | SCV1_UART_CTRL_RX_EN;
-    const char *p = what;
+    const char *p  = what;
     while (*p != '\0') {
-        while ((SCV1_UART_STATE & SCV1_UART_STATE_TX_FULL) != 0u) { }
+        while ((SCV1_UART_STATE & SCV1_UART_STATE_TX_FULL) != 0u) {}
         SCV1_UART_DATA = (uint32_t)(unsigned char)*p++;
     }
     for (;;) {
@@ -88,24 +88,27 @@ void scv1_fault_c(uint32_t *frame)
  * exception return. */
 __attribute__((naked)) static void handler_hardfault(void)
 {
-    __asm__ volatile(
-        "mrs r0, msp   \n"
-        "b scv1_fault_c\n");
+    __asm__ volatile("mrs r0, msp   \n"
+                     "b scv1_fault_c\n");
 }
 
-static void handler_nmi(void)        { fault_halt("\n!! SCV1 FAULT: NMI\n"); }
-static void handler_memmanage(void)  { fault_halt("\n!! SCV1 FAULT: MemManage\n"); }
-static void handler_busfault(void)   { fault_halt("\n!! SCV1 FAULT: BusFault\n"); }
-static void handler_usagefault(void) { fault_halt("\n!! SCV1 FAULT: UsageFault\n"); }
-static void handler_default(void)    { fault_halt("\n!! SCV1 FAULT: unexpected interrupt\n"); }
+static void handler_nmi(void)
+{ fault_halt("\n!! SCV1 FAULT: NMI\n"); }
+static void handler_memmanage(void)
+{ fault_halt("\n!! SCV1 FAULT: MemManage\n"); }
+static void handler_busfault(void)
+{ fault_halt("\n!! SCV1 FAULT: BusFault\n"); }
+static void handler_usagefault(void)
+{ fault_halt("\n!! SCV1 FAULT: UsageFault\n"); }
+static void handler_default(void)
+{ fault_halt("\n!! SCV1 FAULT: unexpected interrupt\n"); }
 
 /* DebugMonitor takes the BKPT instead of HardFault when debug is enabled, so
  * it needs the same recovery. */
 __attribute__((naked)) static void handler_debugmon(void)
 {
-    __asm__ volatile(
-        "mrs r0, msp   \n"
-        "b scv1_fault_c\n");
+    __asm__ volatile("mrs r0, msp   \n"
+                     "b scv1_fault_c\n");
 }
 
 /* ------------------------------------------------------ vector table ------ */
@@ -120,26 +123,28 @@ __attribute__((naked)) static void handler_debugmon(void)
  * reads.
  */
 typedef union {
-    void      (*handler)(void);
-    uintptr_t   value;
+    void (*handler)(void);
+    uintptr_t value;
 } scv1_vector;
 
 __attribute__((section(".vectors"), used))
 const scv1_vector scv1_vectors[16] = {
-    { .value   = (uintptr_t)&_estack },   /*  0: initial stack pointer  */
-    { .handler = scv1_reset_handler   },  /*  1: reset                  */
-    { .handler = handler_nmi          },  /*  2: NMI                    */
-    { .handler = handler_hardfault    },  /*  3: HardFault              */
-    { .handler = handler_memmanage    },  /*  4: MemManage              */
-    { .handler = handler_busfault     },  /*  5: BusFault               */
-    { .handler = handler_usagefault   },  /*  6: UsageFault             */
-    { .value   = 0u }, { .value = 0u },   /*  7-8:  reserved            */
-    { .value   = 0u }, { .value = 0u },   /*  9-10: reserved            */
-    { .handler = handler_default      },  /* 11: SVCall                 */
-    { .handler = handler_debugmon     },  /* 12: DebugMonitor           */
-    { .value   = 0u },                    /* 13: reserved               */
-    { .handler = handler_default      },  /* 14: PendSV                 */
-    { .handler = handler_default      }   /* 15: SysTick                */
+    { .value = (uintptr_t)&_estack },  /*  0: initial stack pointer  */
+    { .handler = scv1_reset_handler }, /*  1: reset                  */
+    { .handler = handler_nmi },        /*  2: NMI                    */
+    { .handler = handler_hardfault },  /*  3: HardFault              */
+    { .handler = handler_memmanage },  /*  4: MemManage              */
+    { .handler = handler_busfault },   /*  5: BusFault               */
+    { .handler = handler_usagefault }, /*  6: UsageFault             */
+    { .value = 0u },
+    { .value = 0u }, /*  7-8:  reserved            */
+    { .value = 0u },
+    { .value = 0u },                 /*  9-10: reserved            */
+    { .handler = handler_default },  /* 11: SVCall                 */
+    { .handler = handler_debugmon }, /* 12: DebugMonitor           */
+    { .value = 0u },                 /* 13: reserved               */
+    { .handler = handler_default },  /* 14: PendSV                 */
+    { .handler = handler_default }   /* 15: SysTick                */
 };
 
 /* ------------------------------------------------------ reset handler ----- */

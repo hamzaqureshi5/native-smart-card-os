@@ -27,12 +27,12 @@
 /* ------------------------------------------------------------------ status */
 
 typedef enum {
-    HAL_OK              =  0,
+    HAL_OK = 0,
     /* Not an error: the reader asserted RST. hal_card_receive() returns this
      * INSTEAD of a command, and the OS must clear its volatile state. Reported
      * as a return value rather than delivered by a callback into the OS,
      * because the HAL must never depend on the layer above it. */
-    HAL_CARD_RESET      =  1,
+    HAL_CARD_RESET      = 1,
     HAL_ERR_PARAM       = -1, /* caller passed a bad argument                */
     HAL_ERR_RANGE       = -2, /* offset/length outside the addressed region   */
     HAL_ERR_IO          = -3, /* link or memory device failure                */
@@ -71,8 +71,8 @@ uint32_t hal_nvm_size(hal_nvm_region region);
  * transaction journalling; it must never assume a value. */
 uint32_t hal_nvm_page_size(hal_nvm_region region);
 
-hal_status hal_nvm_read(hal_nvm_region region, uint32_t offset,
-                        void *dst, uint32_t len);
+hal_status hal_nvm_read(hal_nvm_region region, uint32_t offset, void *dst,
+                        uint32_t len);
 
 /* Write may be buffered by the device. It is NOT durable until
  * hal_nvm_sync() returns HAL_OK. */

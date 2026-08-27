@@ -61,8 +61,8 @@
 
 #define FS_LAYOUT_VERSION 1u
 
-#define FS_SB_OFFSET   0u
-#define FS_DESC_BASE   (FS_SB_OFFSET + FS_SUPERBLOCK_SIZE)
+#define FS_SB_OFFSET 0u
+#define FS_DESC_BASE (FS_SB_OFFSET + FS_SUPERBLOCK_SIZE)
 
 /* In-RAM mirror of the superblock. Small, hot, and re-read on every mount. */
 static struct {
@@ -81,9 +81,7 @@ static void put_u16(uint8_t *p, uint16_t v)
 }
 
 static uint16_t get_u16(const uint8_t *p)
-{
-    return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
-}
+{ return (uint16_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]); }
 
 static void put_u32(uint8_t *p, uint32_t v)
 {
@@ -96,7 +94,7 @@ static void put_u32(uint8_t *p, uint32_t v)
 static uint32_t get_u32(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-           ((uint32_t)p[2] << 8)  | (uint32_t)p[3];
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
 /* ------------------------------------------------------------- superblock -- */
@@ -116,7 +114,8 @@ static fs_status sb_write(void)
     put_u16(&raw[12], 0u);
     put_u16(&raw[14], crc16(raw, 14u));
 
-    if (hal_nvm_write(HAL_NVM_EEPROM, FS_SB_OFFSET, raw, sizeof(raw)) != HAL_OK) {
+    if (hal_nvm_write(HAL_NVM_EEPROM, FS_SB_OFFSET, raw, sizeof(raw)) !=
+        HAL_OK) {
         return FS_ERR_NVM;
     }
     /* The superblock is the root of trust for the whole layout. Make it
@@ -132,12 +131,13 @@ fs_status fs_store_mount(void)
     s_sb.mounted = false;
 
     uint8_t raw[FS_SUPERBLOCK_SIZE];
-    if (hal_nvm_read(HAL_NVM_EEPROM, FS_SB_OFFSET, raw, sizeof(raw)) != HAL_OK) {
+    if (hal_nvm_read(HAL_NVM_EEPROM, FS_SB_OFFSET, raw, sizeof(raw)) !=
+        HAL_OK) {
         return FS_ERR_NVM;
     }
 
-    if (raw[0] != FS_MAGIC_0 || raw[1] != FS_MAGIC_1 ||
-        raw[2] != FS_MAGIC_2 || raw[3] != FS_MAGIC_3) {
+    if (raw[0] != FS_MAGIC_0 || raw[1] != FS_MAGIC_1 || raw[2] != FS_MAGIC_2 ||
+        raw[3] != FS_MAGIC_3) {
         return FS_ERR_NOT_FORMATTED;
     }
 
@@ -199,8 +199,10 @@ fs_status fs_store_format(void)
     os_memset(free_desc, 0xFF, sizeof(free_desc));
 
     for (uint16_t i = 0; i < FS_MAX_FILES; i++) {
-        const uint32_t off = (uint32_t)FS_DESC_BASE + ((uint32_t)i * FS_DESC_SIZE);
-        if (hal_nvm_write(HAL_NVM_EEPROM, off, free_desc, FS_DESC_SIZE) != HAL_OK) {
+        const uint32_t off =
+            (uint32_t)FS_DESC_BASE + ((uint32_t)i * FS_DESC_SIZE);
+        if (hal_nvm_write(HAL_NVM_EEPROM, off, free_desc, FS_DESC_SIZE) !=
+            HAL_OK) {
             return FS_ERR_NVM;
         }
     }
@@ -217,11 +219,10 @@ fs_status fs_store_format(void)
     return FS_OK;
 }
 
-bool     fs_store_is_mounted(void) { return s_sb.mounted; }
+bool fs_store_is_mounted(void)
+{ return s_sb.mounted; }
 uint16_t fs_store_max_files(void)
-{
-    return s_sb.mounted ? s_sb.max_files : 0u;
-}
+{ return s_sb.mounted ? s_sb.max_files : 0u; }
 
 /* ------------------------------------------------------------ descriptors -- */
 
@@ -260,7 +261,7 @@ fs_status fs_store_read_desc(uint16_t index, fs_descriptor *out)
     }
     os_memset(out, 0, sizeof(*out));
 
-    uint8_t raw[FS_DESC_SIZE];
+    uint8_t         raw[FS_DESC_SIZE];
     const fs_status st = desc_raw_read(index, raw);
     if (st != FS_OK) {
         return st;
