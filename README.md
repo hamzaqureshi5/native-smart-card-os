@@ -226,7 +226,7 @@ diffs; if yours disagrees with CI, that is why.
 
 | Option | Default | Purpose |
 |---|---|---|
-| `SCOS_HAL` | `simulator` | HAL implementation: `simulator` or `samsung` |
+| `SCOS_HAL` | `simulator` | HAL implementation: `simulator`, `arm-scv1` or `s3m228a` |
 | `SCOS_SANITIZE` | `ON` | AddressSanitizer + UndefinedBehaviorSanitizer |
 | `SCOS_WERROR` | `ON` | warnings are errors |
 | `SCOS_STATIC_ANALYSIS` | `OFF` | GCC `-fanalyzer` |
@@ -270,7 +270,7 @@ a rewrite.
                          HAL          <- include/hal/hal.h, the contract
               +-----------+-----------+
               |                       |
-        Simulator HAL           Samsung HAL
+        Simulator HAL           S3M228A HAL
               |                       |
              PC                 real secure MCU
 ```
@@ -287,7 +287,7 @@ include/hal/sim/      virtual-chip internals (simulator only)
 src/kernel/           kernel; card_loop.c is the only core file touching the HAL
 src/apdu/             parser, dispatcher, response builder, SELECT
 src/hal/simulator/    HAL over the virtual chip
-src/hal/samsung/      placeholder -- contains no Samsung-specific code
+src/hal/s3m228a/      placeholder -- contains no part-specific code
 simulator/            virtual chip, transport, main()
 tests/unit/           core tests (link no HAL) + HAL contract tests
 tests/integration/    layering and budget guards
@@ -323,9 +323,9 @@ reference — memory map, boot flow, slot header, flash semantics — and
 part. `docs/fuzzing.md` covers the fuzz targets and is honest about what they
 are not.
 
-## On Samsung hardware
+## On the Samsung S3M228A
 
-`src/hal/samsung/` exists and is **deliberately unimplemented**. It contains no
+`src/hal/s3m228a/` exists and is **deliberately unimplemented**. It contains no
 register addresses, no memory map, no boot sequence, no crypto peripheral
 interface -- nothing derived from any Samsung documentation, because no such
 documentation has been consulted. Every function returns

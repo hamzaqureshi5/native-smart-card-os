@@ -4,7 +4,7 @@
 > map, its region sizes and its loader protocol are ours, defined here. It is
 > **not** a Samsung part, not any other vendor's part, and no register value or
 > address in it was taken from any vendor's documentation. When real hardware
-> documentation arrives, `src/hal/samsung/` gets written against it and SCV1
+> documentation arrives, `src/hal/s3m228a/` gets written against it and SCV1
 > stays as the reference target.
 
 ## What is real, and what is ours

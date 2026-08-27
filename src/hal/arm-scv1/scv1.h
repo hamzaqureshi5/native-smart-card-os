@@ -22,7 +22,7 @@
  *     therefore QEMU) provides.
  *
  * The point of SCV1 is to have a target that is honestly specified. When
- * real hardware documentation arrives, src/hal/samsung/ gets written
+ * real hardware documentation arrives, src/hal/s3m228a/ gets written
  * against it and this stays as the reference target.
  * ======================================================================
  */

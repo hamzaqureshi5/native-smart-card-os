@@ -2,7 +2,7 @@
 
 ## Current status
 
-`src/hal/samsung/` is a **placeholder containing no chip-specific code.**
+`src/hal/s3m228a/` is a **placeholder containing no chip-specific code.**
 
 No Samsung datasheet, reference manual, SDK or errata has been consulted. There
 are no register addresses, no memory map, no boot sequence, no crypto peripheral
@@ -11,7 +11,7 @@ would be worse than useless -- it would produce code that looks like a port and
 is fiction.
 
 Every function in the stub returns `HAL_ERR_UNSUPPORTED`, and the file
-**refuses to compile** without `-DSCOS_ACK_SAMSUNG_STUB=ON`. A HAL that quietly
+**refuses to compile** without `-DSCOS_ACK_S3M228A_STUB=ON`. A HAL that quietly
 returns plausible values is far more dangerous than one that will not build: it
 would let the OS appear to work while writing nothing to real NVM.
 
@@ -178,7 +178,7 @@ part rather than in an argument.
 A product page is not a datasheet. It gives the core family, clock, memory
 sizes and interface. It gives no memory map, no register addresses, no
 flash-programming sequence, no boot procedure and no crypto peripheral detail.
-So `src/hal/samsung/` stays stubbed. Everything in "Facts to establish from
+So `src/hal/s3m228a/` stays stubbed. Everything in "Facts to establish from
 that documentation" above is still unestablished.
 
 ## Porting procedure

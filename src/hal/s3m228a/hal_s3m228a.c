@@ -1,55 +1,73 @@
 /* SPDX-License-Identifier: MIT
  *
- * hal_samsung_stub.c -- PLACEHOLDER. NOT A PORT.
+ * hal_s3m228a.c -- the Samsung S3M228A port. NOT IMPLEMENTED.
  *
  * ==========================================================================
  * NOTHING IN THIS FILE IS DERIVED FROM ANY SAMSUNG DOCUMENTATION.
  *
  * No register addresses, no memory map, no boot sequence, no crypto
- * peripheral, no debug interface. The author of this file has never seen a
- * datasheet for the target part. Every function below fails at run time and
+ * peripheral, no debug interface. The author has never seen a datasheet or
+ * reference manual for this part. Every function below fails at run time and
  * the whole file fails at compile time unless you explicitly acknowledge
  * that, because a HAL that quietly returns plausible values is far more
  * dangerous than one that refuses to build: it would let the OS appear to
  * work while writing nothing to real NVM.
  * ==========================================================================
  *
- * WHAT THIS FILE IS FOR
+ * WHAT IS PUBLICLY KNOWN ABOUT THE TARGET
+ *
+ * From Samsung's public product page only -- a marketing page, not a
+ * datasheet:
+ *
+ *   Core          ARM SecurCore SC000, 14 MHz
+ *   Architecture  ARMv6-M (Cortex-M0 class)
+ *   Flash         228 KB (one figure; no published code/data split)
+ *   RAM           5 KB
+ *   Interface     ISO 7816
+ *
+ * https://semiconductor.samsung.com/security-solution/ese-esim-sim/part-number/s3m228a/
+ *
+ * That is enough to know the toolchain (arm-none-eabi, -mcpu=cortex-m0) and
+ * that the OS must fit in 5 KB of RAM shared with the stack. It is NOT enough
+ * to write a single line of the port. See docs/hardware-port.md.
+ *
+ * WHAT THIS FILE IS FOR TODAY
  *
  * It proves the seam is real. include/hal/hal.h is a complete contract, and
  * this file is a second, independent implementation of it. If the OS core has
  * accidentally grown a dependency on the simulator, linking this
  * implementation is what exposes it -- the core links cleanly against a HAL
- * that does nothing.
+ * that does nothing. CI builds this configuration for exactly that reason.
  *
- * HOW TO TURN IT INTO A PORT (when documentation exists)
+ * WHAT IS STILL MISSING, AND WHY EACH ITEM BLOCKS THE PORT
  *
- *   1. Supply the datasheet / reference manual / SDK.
- *   2. Establish, from that documentation only:
- *        - CPU architecture, endianness, and toolchain
- *        - memory map: ROM/flash/EEPROM/RAM base addresses and sizes
- *        - NVM programming: page size, erase granularity, write timing,
- *          how to detect completion, and what a power loss mid-program leaves
- *          behind (this last point decides the transaction design)
- *        - TRNG: how to start it, how to read it, and how its health test
- *          reports failure
- *        - crypto accelerator: AES/ECC interfaces, and whether key material
- *          can be kept in hardware key slots rather than in RAM
- *        - the ISO 7816-3 / 14443 interface block and its ATR configuration
- *        - security sensors and how tamper events are delivered
- *   3. Implement each hal_* function against those documented registers.
- *   4. Run the same tests. That is the payoff: the test suite written against
- *      the simulator is a conformance suite for the port.
+ *   - Memory map: flash/EEPROM/RAM base addresses and the code/data split
+ *     inside those 228 KB. Without it there is no linker script.
+ *   - NVM programming: page size, erase granularity, write timing, how to
+ *     detect completion, and what a power loss mid-program leaves behind.
+ *     That last point decides the whole transaction design (M4).
+ *   - Vector table handling: ARMv6-M has no VTOR, so how a boot ROM hands
+ *     control to a separately-loaded OS is an open question on this part.
+ *     Requires the ARM SecurCore SC000 TRM. See docs/hardware-port.md.
+ *   - TRNG: how to start it, how to read it, how its health test reports
+ *     failure.
+ *   - Crypto accelerator: AES/ECC interfaces, and whether keys can live in
+ *     hardware slots rather than RAM.
+ *   - ISO 7816-3 interface block and its ATR configuration.
+ *   - Security sensors and how tamper events are delivered.
  *
- * See docs/hardware-port.md for the full checklist.
+ * Supply the documentation and each hal_* function below gets implemented
+ * against documented registers. Then run the same test suite: that is the
+ * payoff -- the tests written against the simulator are a conformance suite
+ * for this port.
  */
 
 /* Refuse to build unless the developer has stated intent. This is the guard
- * rail: `-DSCOS_HAL=samsung` alone will not produce a binary that pretends to
+ * rail: `-DSCOS_HAL=s3m228a` alone will not produce a binary that pretends to
  * work on hardware. */
-#if !defined(SCOS_SAMSUNG_STUB_ACKNOWLEDGED)
-#error "src/hal/samsung is an unimplemented placeholder, not a port. \
-Configure with -DSCOS_ACK_SAMSUNG_STUB=ON to build it anyway (it will fail \
+#if !defined(SCOS_S3M228A_STUB_ACKNOWLEDGED)
+#error "src/hal/s3m228a is an unimplemented placeholder, not a port. \
+Configure with -DSCOS_ACK_S3M228A_STUB=ON to build it anyway (it will fail \
 at run time), or use -DSCOS_HAL=simulator."
 #endif
 

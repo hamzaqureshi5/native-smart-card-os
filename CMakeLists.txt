@@ -18,8 +18,8 @@ endif()
 
 # ---------------------------------------------------------------- options ----
 
-set(SCOS_HAL "simulator" CACHE STRING "HAL implementation: simulator | arm-scv1 | samsung")
-set_property(CACHE SCOS_HAL PROPERTY STRINGS simulator arm-scv1 samsung)
+set(SCOS_HAL "simulator" CACHE STRING "HAL implementation: simulator | arm-scv1 | s3m228a")
+set_property(CACHE SCOS_HAL PROPERTY STRINGS simulator arm-scv1 s3m228a)
 
 # Cross builds default to the SCV1 chip target: a native "simulator" HAL cannot
 # be built for a bare-metal ARM target, so pick the sensible default rather than
@@ -31,7 +31,7 @@ endif()
 option(SCOS_SANITIZE       "Build with AddressSanitizer + UndefinedBehaviorSanitizer" ON)
 option(SCOS_WERROR         "Treat warnings as errors" ON)
 option(SCOS_STATIC_ANALYSIS "Enable the GCC static analyzer (-fanalyzer)" OFF)
-option(SCOS_ACK_SAMSUNG_STUB "Build the unimplemented Samsung HAL anyway" OFF)
+option(SCOS_ACK_S3M228A_STUB "Build the unimplemented S3M228A HAL anyway" OFF)
 
 # Virtual chip geometry. Simulator defaults only; not any real part.
 set(SCOS_SIM_RAM_KB    16  CACHE STRING "Virtual RAM (KB)")
@@ -184,17 +184,18 @@ elseif(SCOS_HAL STREQUAL "arm-scv1")
     src/hal/arm-scv1/hal_arm_platform.c
   )
   target_include_directories(scos_hal PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/hal/arm-scv1")
-elseif(SCOS_HAL STREQUAL "samsung")
-  add_library(scos_hal STATIC src/hal/samsung/hal_samsung_stub.c)
-  if(SCOS_ACK_SAMSUNG_STUB)
-    target_compile_definitions(scos_hal PRIVATE SCOS_SAMSUNG_STUB_ACKNOWLEDGED=1)
+elseif(SCOS_HAL STREQUAL "s3m228a")
+  add_library(scos_hal STATIC src/hal/s3m228a/hal_s3m228a.c)
+  if(SCOS_ACK_S3M228A_STUB)
+    target_compile_definitions(scos_hal PRIVATE SCOS_S3M228A_STUB_ACKNOWLEDGED=1)
   endif()
   message(WARNING
-    "SCOS_HAL=samsung selects an UNIMPLEMENTED placeholder. It contains no "
-    "Samsung-specific code and every function fails at run time.")
+    "SCOS_HAL=s3m228a selects an UNIMPLEMENTED placeholder. It contains no "
+    "part-specific code and every function fails at run time. It exists to "
+    "prove the HAL seam holds and to be the place the real port lands.")
 else()
   message(FATAL_ERROR
-    "SCOS_HAL must be 'simulator', 'arm-scv1' or 'samsung' (got '${SCOS_HAL}')")
+    "SCOS_HAL must be 'simulator', 'arm-scv1' or 's3m228a' (got '${SCOS_HAL}')")
 endif()
 
 # NOTE: scos_hal deliberately does NOT link scos_core. The HAL sits BELOW the

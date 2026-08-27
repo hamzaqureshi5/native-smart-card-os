@@ -11,11 +11,11 @@
  *      operating system, no heap and no filesystem.
  *   3. No function here may allocate memory. The caller always owns the buffer.
  *   4. Exactly one implementation is linked into a given build, chosen by the
- *      CMake option SCOS_HAL (simulator | samsung).
+ *      CMake option SCOS_HAL (simulator | arm-scv1 | s3m228a).
  *
  * Implementations:
  *   src/hal/simulator/  -- virtual chip on a PC (this milestone)
- *   src/hal/samsung/    -- stubbed; awaiting real chip documentation
+ *   src/hal/s3m228a/    -- stubbed; awaiting real chip documentation
  */
 #ifndef SCOS_HAL_H
 #define SCOS_HAL_H

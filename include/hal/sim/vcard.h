@@ -8,7 +8,7 @@
  * headers.
  *
  * This is the layer that gets DELETED (not ported) when real hardware arrives:
- * src/hal/samsung/ will implement include/hal/hal.h directly against real
+ * src/hal/s3m228a/ will implement include/hal/hal.h directly against real
  * peripherals, and nothing here will be referenced.
  */
 #ifndef SCOS_VCARD_H
