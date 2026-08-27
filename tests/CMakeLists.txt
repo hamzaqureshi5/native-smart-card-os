@@ -43,7 +43,7 @@ add_test(NAME test_boot_loader COMMAND test_boot_loader)
 # These need NVM, so a HAL is linked in. The simulator HAL with state_dir=NULL
 # is an in-RAM hermetic store -- a test double that is also the real code path.
 if(SCOS_HAL STREQUAL "simulator")
-  foreach(t test_hal_sim test_select test_fs)
+  foreach(t test_hal_sim test_select test_fs test_create)
     add_executable(${t} unit/${t}.c)
     target_link_libraries(${t} PRIVATE scos_core scos_hal scos_warnings)
     target_include_directories(${t} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit")
@@ -61,7 +61,7 @@ foreach(t test_apdu_parse test_os_mem test_tlv test_boot_loader)
   set_tests_properties(${t} PROPERTIES ENVIRONMENT "${SCOS_SAN_OPTS}")
 endforeach()
 if(SCOS_HAL STREQUAL "simulator")
-  foreach(t test_hal_sim test_select test_fs)
+  foreach(t test_hal_sim test_select test_fs test_create)
     set_tests_properties(${t} PROPERTIES ENVIRONMENT "${SCOS_SAN_OPTS}")
   endforeach()
 endif()
@@ -79,7 +79,8 @@ if(SCOS_HAL STREQUAL "simulator")
     fuzz/fuzz_tlv.c
     fuzz/fuzz_command.c
     fuzz/fuzz_fs_image.c
-    fuzz/fuzz_boot.c)
+    fuzz/fuzz_boot.c
+    fuzz/fuzz_fcp.c)
   target_link_libraries(fuzz_driver PRIVATE scos_core scos_hal scos_boot scos_warnings)
   target_include_directories(fuzz_driver PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fuzz")
   set_target_properties(fuzz_driver PROPERTIES
@@ -92,6 +93,14 @@ if(SCOS_HAL STREQUAL "simulator")
     set_tests_properties(fuzz_${tgt} PROPERTIES
       ENVIRONMENT "${SCOS_SAN_OPTS}" TIMEOUT 300)
   endforeach()
+
+  # fcp gets fewer iterations because it is an order of magnitude slower than
+  # the others: it re-personalises a card per input and re-walks all 32
+  # descriptors after EVERY command, which is O(n^2) and is the whole point.
+  # For a real hunt: ./fuzz_driver fcp 200000 <seed>
+  add_test(NAME fuzz_fcp COMMAND fuzz_driver fcp 3000 1)
+  set_tests_properties(fuzz_fcp PROPERTIES
+    ENVIRONMENT "${SCOS_SAN_OPTS}" TIMEOUT 300)
 endif()
 
 # --- architectural guard tests ---------------------------------------------

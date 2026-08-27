@@ -114,13 +114,29 @@ class TestProtocolErrors(CardTestCase):
         self.assertSW(self.card.send_apdu("00EE0000"), SW_INS_NOT_SUPPORTED)
 
     def test_unimplemented_instructions(self):
-        # B0 / D6 graduated to implemented in M2 (see test_filesystem.py).
-        for ins in ("20", "CA", "E0", "E4", "C0"):
+        # This list shrinks as milestones land, and each graduation is a
+        # deliberate edit here rather than a loosened assertion:
+        #   B0 / D6  -> M2a  (test_filesystem.py)
+        #   E0 / E4  -> M2b  (test_create.py)
+        # Still absent: VERIFY (M3), GET DATA, GET RESPONSE (M2b, open).
+        for ins in ("20", "CA", "C0"):
             self.assertSW(
                 self.card.send_apdu(f"00{ins}0000"),
                 SW_INS_NOT_SUPPORTED,
                 f"INS {ins}",
             )
+
+    def test_implemented_instructions_are_not_reported_as_unknown(self):
+        """The other half of the test above.
+
+        A dispatcher that answered 6D00 for a command it does in fact have
+        would be a registration bug, and the list above cannot detect it --
+        it only checks what is absent. These get a real error for the empty
+        APDU (6700 or 6986), never 6D00.
+        """
+        for ins in ("A4", "B0", "D6", "E0", "E4"):
+            sw = self.card.send_apdu(f"00{ins}0000").sw
+            self.assertNotEqual(sw, SW_INS_NOT_SUPPORTED, f"INS {ins}")
 
     def test_class_diagnostics(self):
         cases = {

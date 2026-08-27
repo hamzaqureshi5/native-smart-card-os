@@ -188,6 +188,7 @@ static fuzz_fn pick_target(const char *name)
     if (strcmp(name, "command") == 0)  { return scos_fuzz_command; }
     if (strcmp(name, "fs_image") == 0) { return scos_fuzz_fs_image; }
     if (strcmp(name, "boot") == 0)     { return scos_fuzz_boot; }
+    if (strcmp(name, "fcp") == 0)      { return scos_fuzz_fcp; }
     return NULL;
 }
 

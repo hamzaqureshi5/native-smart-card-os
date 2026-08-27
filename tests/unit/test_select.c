@@ -214,13 +214,40 @@ TEST(unknown_ins_is_6d00)
 TEST(not_yet_implemented_ins_is_6d00)
 {
     fresh();
-    /* Commands that ISO defines and we have not written yet must report
-     * "INS not supported", which is the truth. B0/D6 have graduated to
-     * implemented in M2 and are covered by test_fs.c. */
-    const uint8_t ins[] = { 0x20, 0xCA, 0xE0, 0xE4, 0xC0 };
+    /*
+     * Commands that ISO defines and we have not written yet must report "INS
+     * not supported", which is the truth. This list SHRINKS as milestones
+     * land, and each graduation is a deliberate edit here:
+     *
+     *   B0 / D6  -> M2a, covered by test_fs.c
+     *   E0 / E4  -> M2b, covered by test_create.c
+     *
+     * Still absent: VERIFY (M3), GET DATA, and GET RESPONSE (M2b, open).
+     */
+    const uint8_t ins[] = { 0x20, 0xCA, 0xC0 };
     for (unsigned i = 0; i < sizeof(ins); i++) {
         const uint8_t cmd[] = { 0x00, ins[i], 0x00, 0x00 };
         CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_INS_NOT_SUPPORTED);
+    }
+}
+
+TEST(implemented_ins_is_never_6d00)
+{
+    /*
+     * The other half of the test above, and the half that catches a real
+     * mistake: a handler that exists but was never added to the dispatch table
+     * answers 6D00, and a list of what is ABSENT cannot detect that.
+     */
+    fresh();
+    const uint8_t ins[] = { 0xA4, 0xB0, 0xD6, 0xE0, 0xE4 };
+    for (unsigned i = 0; i < sizeof(ins); i++) {
+        const uint8_t cmd[] = { 0x00, ins[i], 0x00, 0x00 };
+        const uint16_t sw = send(cmd, sizeof(cmd), NULL);
+        if (sw == SW_INS_NOT_SUPPORTED) {
+            (void)printf("      INS %02X answered 6D00: not in the dispatch "
+                         "table?\n", ins[i]);
+        }
+        CHECK(sw != SW_INS_NOT_SUPPORTED);
     }
 }
 
@@ -388,6 +415,7 @@ int main(void)
     RUN(select_wrong_lc_is_6a87);
     RUN(unknown_ins_is_6d00);
     RUN(not_yet_implemented_ins_is_6d00);
+    RUN(implemented_ins_is_never_6d00);
     RUN(bad_cla_is_diagnosed);
     RUN(cla_checked_before_ins);
     RUN(malformed_apdu_still_answers);

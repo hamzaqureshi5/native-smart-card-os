@@ -56,6 +56,11 @@ set(allowed_regex
     "^os_"
     "^apdu_"
     "^fs_"
+    "^tlv_"     # added when CREATE FILE became the first core caller of the
+                # BER-TLV reader. tlv.c has been in libscos_core since M2b, but
+                # nothing referenced it, so the check never saw the symbol --
+                # a reminder that this test measures what is USED, not what is
+                # compiled.
     "^crc16$"
     "^mem(cpy|set|move|cmp)$"
     "^__asan"

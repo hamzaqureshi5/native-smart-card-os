@@ -56,4 +56,11 @@ int scos_fuzz_fs_image(const uint8_t *data, size_t size);
  * Highest-value target in the set: this code ships in unpatchable mask ROM. */
 int scos_fuzz_boot(const uint8_t *data, size_t size);
 
+/* CREATE FILE / DELETE FILE, with templates biased toward PARSING so the
+ * mutating paths are actually reached -- fuzz_command emits INS E0 but its
+ * random templates never form a valid FCP. Checks tree invariants rather than
+ * status words: no overlapping EF data, no orphans, no duplicate FID or SFI
+ * within a parent. */
+int scos_fuzz_fcp(const uint8_t *data, size_t size);
+
 #endif /* SCOS_FUZZ_TARGETS_H */
