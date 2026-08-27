@@ -31,9 +31,58 @@
  * cache. Enforced by a _Static_assert in include/os/kernel.h. */
 #define SCOS_OS_RAM_BUDGET_BYTES (SCOS_RAM_BYTES / 2u)
 
-/* Largest short-form command APDU: CLA INS P1 P2 Lc <255 data> Le = 261. */
-#define SCOS_APDU_CMD_MAX 261u
-/* Largest short-form response: 256 data bytes + SW1 SW2. */
-#define SCOS_APDU_RSP_MAX 258u
+/*
+ * EXTENDED-LENGTH CEILING -- the one number that decides this card's answer to
+ * a 65535-byte command.
+ *
+ * ISO/IEC 7816-4 permits Lc up to 65535 and Le up to 65536. This card accepts
+ * neither, and says so in the only way that is honest: a documented ceiling,
+ * enforced by the parser, reported as 6700. A card that ANNOUNCED support for
+ * 65535 and then failed somewhere in the middle would be worse than one that
+ * refuses precisely.
+ *
+ * Why 1 KB and not 64 KB: the command data field has to be held in RAM in one
+ * piece before the card can act on it. 65535 bytes is eight times the whole
+ * OS RAM budget and four times the SRAM of the simulated chip -- and, as
+ * docs/hardware-port.md records, thirteen times the RAM of a real SIM part.
+ * No amount of raising SCOS_SIM_RAM_KB makes it fit on hardware; the only
+ * mechanism that ever will is command chaining (CLA bit b5), which sends a
+ * large field as several short APDUs and needs no large buffer at all.
+ *
+ * Why 1 KB and not 255: at 255 the extended encoding would carry nothing the
+ * short form cannot, and implementing a feature that adds no capability is
+ * how a conformance checklist gets ticked without a card getting better.
+ * 1 KB is four times the short-form limit, which makes a difference to a
+ * caller, and costs about 1.5 KB of the 8 KB budget.
+ */
+#define SCOS_APDU_EXT_DATA_MAX 1024u
+
+/*
+ * Command buffer: header + 3-byte extended Lc + data + 2-byte extended Le.
+ * Sized for the extended form, so it also holds any short APDU (261 bytes).
+ */
+#define SCOS_APDU_CMD_MAX (4u + 3u + SCOS_APDU_EXT_DATA_MAX + 2u)
+/* Response buffer: data + SW1 SW2. */
+#define SCOS_APDU_RSP_MAX (SCOS_APDU_EXT_DATA_MAX + 2u)
+
+/*
+ * Response data waiting to be collected by GET RESPONSE.
+ *
+ * 256 because that is the most a short-form Le can ask for, and because SW2 of
+ * a 61XX carries the remaining count in one byte -- 00 meaning 256. A larger
+ * buffer could not be announced.
+ *
+ * This does NOT grow with SCOS_APDU_EXT_DATA_MAX, and the reason is the 61XX
+ * announcement rather than RAM. SW2 of a 61XX carries the remaining count in
+ * ONE byte, so a card cannot tell a reader that more than 256 bytes are
+ * waiting. Staging more than can be announced would leave the surplus
+ * unreachable.
+ *
+ * An extended Le does not need this buffer at all: the response goes straight
+ * out in one exchange, up to SCOS_APDU_RSP_MAX. Staging exists for the T=0
+ * short-form case where the reader asked for nothing and the card has
+ * something -- see src/apdu/cmd_get_response.c.
+ */
+#define SCOS_PENDING_MAX 256u
 
 #endif /* SCOS_CONFIG_H */

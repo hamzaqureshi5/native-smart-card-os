@@ -50,9 +50,9 @@ bool os_memeq_ct(const void *a, const void *b, size_t len)
     if (a == NULL || b == NULL) {
         return false;
     }
-    const volatile uint8_t *pa = (const volatile uint8_t *)a;
-    const volatile uint8_t *pb = (const volatile uint8_t *)b;
-    uint8_t diff = 0u;
+    const volatile uint8_t *pa   = (const volatile uint8_t *)a;
+    const volatile uint8_t *pb   = (const volatile uint8_t *)b;
+    uint8_t                 diff = 0u;
     for (size_t i = 0; i < len; i++) {
         diff |= (uint8_t)(pa[i] ^ pb[i]);
     }
@@ -62,6 +62,4 @@ bool os_memeq_ct(const void *a, const void *b, size_t len)
 /* volatile writes so the compiler may not discard this as a dead store to a
  * buffer that is about to go out of scope. */
 void os_memzero(void *dst, size_t len)
-{
-    os_memset(dst, 0u, len);
-}
+{ os_memset(dst, 0u, len); }

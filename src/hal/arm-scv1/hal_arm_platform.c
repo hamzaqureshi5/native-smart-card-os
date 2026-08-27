@@ -7,7 +7,6 @@
 #include "scv1_internal.h"
 #include "semihost.h"
 
-
 /* ---------------------------------------------------------- lifecycle ----- */
 
 hal_status hal_init(void)
@@ -36,9 +35,7 @@ void hal_reset(void)
 }
 
 void hal_shutdown(void)
-{
-    scv1_nvm_power_off();
-}
+{ scv1_nvm_power_off(); }
 
 /* ------------------------------------------------------------- entropy ---- */
 
@@ -46,8 +43,12 @@ static uint64_t s_rng_state = 0x2545F4914F6CDD1DULL;
 
 hal_status hal_random_bytes(void *dst, size_t len)
 {
-    if (dst == NULL) { return HAL_ERR_PARAM; }
-    if (len == 0u)   { return HAL_OK; }
+    if (dst == NULL) {
+        return HAL_ERR_PARAM;
+    }
+    if (len == 0u) {
+        return HAL_OK;
+    }
 
     /*
      * SCV1 HAS NO TRNG, AND THIS IS NOT ONE.
@@ -71,7 +72,7 @@ hal_status hal_random_bytes(void *dst, size_t len)
         x ^= x >> 12;
         x ^= x << 25;
         x ^= x >> 27;
-        s_rng_state = x;
+        s_rng_state      = x;
         const uint64_t r = x * 0x2545F4914F6CDD1DULL;
 
         const size_t n = ((len - i) < 8u) ? (len - i) : 8u;

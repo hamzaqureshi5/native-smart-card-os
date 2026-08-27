@@ -38,15 +38,16 @@ That is the whole surface. It is why porting to real silicon is a bounded job.
     +-----------------------------------------------------+
               |                             |
     +-------------------+         +-------------------+
-    | Simulator HAL     |         | Samsung HAL       |
-    | src/hal/simulator |         | src/hal/samsung   |
+    | Simulator HAL     |         | S3M228A HAL       |
+    | src/hal/simulator |         | src/hal/s3m228a   |
     | + simulator/      |         | (stub, no code)   |
     +-------------------+         +-------------------+
               |                             |
              PC                       real secure MCU
 
 `hal.h` is a third party to the OS and the simulator both. Neither includes the
-other's headers. Selection is at link time via `-DSCOS_HAL=simulator|samsung`,
+other's headers. Selection is at link time via
+`-DSCOS_HAL=simulator|arm-scv1|s3m228a`,
 not through function pointers -- a writable vtable in RAM is both overhead and
 an attack surface on a chip where a single write primitive should not become
 control-flow hijacking.
@@ -141,7 +142,7 @@ restriction to a representative build, not a skipped failure.
 | `include/hal/sim/` | virtual-chip internals | simulator only |
 | `src/kernel/` `src/apdu/` | the OS | yes, freestanding |
 | `src/hal/simulator/` | HAL over the virtual chip | host |
-| `src/hal/samsung/` | placeholder, no chip code | future |
+| `src/hal/s3m228a/` | placeholder, no chip code | future |
 | `simulator/` | virtual chip, transport, `main()` | host |
 | `tests/unit/` | core tests (no HAL) + HAL contract tests | mostly |
 | `tests/integration/` | layering and budget guards | build-time |

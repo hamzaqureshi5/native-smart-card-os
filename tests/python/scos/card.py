@@ -385,15 +385,30 @@ class SmartCard:
         """Warm reset. The card answers with its ATR, as a real one does."""
         return _to_bytes(self.send_raw(".reset"))
 
-    def select(self, file_id: Union[int, str, bytes] = 0x3F00) -> Response:
-        """SELECT by file identifier (P1=00, P2=00)."""
+    def select(self, file_id: Union[int, str, bytes] = 0x3F00,
+               fci: bool = False) -> Response:
+        """SELECT by file identifier (P1=00).
+
+        P2 defaults to 0x0C -- "no response data" -- because that is what a
+        client wanting to NAVIGATE should send, and it answers 9000.
+
+        With P2=00 the card is being asked for the file's control information,
+        and a Case 3 SELECT cannot return it: under T=0 the reader stated no
+        Le, so the card answers 61XX and the data must be fetched with GET
+        RESPONSE. That is correct ISO behaviour, but it makes `select()` a
+        two-step call for tests that only wanted to move the current file.
+
+        Pass fci=True to ask for it, and expect 61XX (or supply your own Le).
+        The 61XX path itself is covered by test_get_response.py.
+        """
         if isinstance(file_id, int):
             fid = bytes([(file_id >> 8) & 0xFF, file_id & 0xFF])
         else:
             fid = _to_bytes(file_id)
         if len(fid) != 2:
             raise ValueError("a file identifier is exactly 2 bytes")
-        return self.send_apdu(bytes([0x00, 0xA4, 0x00, 0x00, len(fid)]) + fid)
+        p2 = 0x00 if fci else 0x0C
+        return self.send_apdu(bytes([0x00, 0xA4, 0x00, p2, len(fid)]) + fid)
 
     @property
     def transcript(self) -> str:

@@ -49,11 +49,11 @@
 
 typedef enum {
     TLV_OK = 0,
-    TLV_END,            /* no more objects: normal end of the sequence */
+    TLV_END, /* no more objects: normal end of the sequence */
     TLV_ERR_PARAM,
-    TLV_ERR_TRUNCATED,  /* an object claims more bytes than are present */
-    TLV_ERR_TAG,        /* malformed tag, or longer than we accept          */
-    TLV_ERR_LENGTH      /* malformed length, indefinite, or too long        */
+    TLV_ERR_TRUNCATED, /* an object claims more bytes than are present */
+    TLV_ERR_TAG,       /* malformed tag, or longer than we accept          */
+    TLV_ERR_LENGTH     /* malformed length, indefinite, or too long        */
 } tlv_status;
 
 typedef struct {
@@ -64,7 +64,7 @@ typedef struct {
 
 typedef struct {
     uint16_t       tag;
-    const uint8_t *value;       /* aliases the reader's buffer; no copy */
+    const uint8_t *value; /* aliases the reader's buffer; no copy */
     uint16_t       length;
     bool           constructed; /* bit 6 of the first tag byte */
 } tlv_object;
@@ -102,7 +102,7 @@ tlv_status tlv_get_uint(const tlv_object *obj, uint32_t *out);
 
 /* Append one primitive object. Returns false if it would not fit, having
  * written nothing -- a half-written template is worse than none. */
-bool tlv_put(uint8_t *buf, uint16_t cap, uint16_t *pos,
-             uint16_t tag, const uint8_t *value, uint16_t length);
+bool tlv_put(uint8_t *buf, uint16_t cap, uint16_t *pos, uint16_t tag,
+             const uint8_t *value, uint16_t length);
 
 #endif /* SCOS_TLV_H */

@@ -27,7 +27,8 @@ static scos_kernel s_card;
 
 static void usage(const char *argv0)
 {
-    (void)fprintf(stderr,
+    (void)fprintf(
+        stderr,
         "usage: %s [options]\n"
         "\n"
         "  --state-dir DIR   persist virtual EEPROM/FLASH in DIR\n"
@@ -46,8 +47,8 @@ static int parse_u32(const char *s, uint32_t *out)
     if (s == NULL || *s == '\0') {
         return -1;
     }
-    char           *end = NULL;
-    unsigned long   v   = strtoul(s, &end, 0);
+    char         *end = NULL;
+    unsigned long v   = strtoul(s, &end, 0);
     if (end == NULL || *end != '\0' || v > 0xFFFFFFFFUL) {
         return -1;
     }
@@ -62,10 +63,9 @@ int main(int argc, char **argv)
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
-        int need_value = (strcmp(a, "--state-dir") == 0) ||
-                         (strcmp(a, "--eeprom") == 0)    ||
-                         (strcmp(a, "--flash") == 0)     ||
-                         (strcmp(a, "--seed") == 0);
+        int         need_value =
+            (strcmp(a, "--state-dir") == 0) || (strcmp(a, "--eeprom") == 0) ||
+            (strcmp(a, "--flash") == 0) || (strcmp(a, "--seed") == 0);
         if (need_value && i + 1 >= argc) {
             (void)fprintf(stderr, "%s: missing value for %s\n", argv[0], a);
             return 2;
@@ -125,12 +125,14 @@ int main(int argc, char **argv)
     const scos_status init_st = scos_init(&s_card);
     if (init_st != SCOS_OK) {
         if (s_card.lifecycle == SCOS_LC_FS_ERROR) {
-            (void)fprintf(stderr,
+            (void)fprintf(
+                stderr,
                 "WARNING: filesystem did not mount. The card will answer 6581 "
                 "to every command.\n"
                 "         It was NOT auto-formatted: that would destroy the "
                 "data most worth\n"
-                "         recovering. Use a fresh --state-dir to start over.\n");
+                "         recovering. Use a fresh --state-dir to start "
+                "over.\n");
         } else {
             (void)fprintf(stderr, "fatal: OS init failed (%d)\n", (int)init_st);
             hal_shutdown();

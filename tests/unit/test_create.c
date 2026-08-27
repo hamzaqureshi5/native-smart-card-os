@@ -28,14 +28,15 @@ static void fresh(void)
     CHECK_EQ(scos_init(&g_card), SCOS_OK);
 }
 
-static uint16_t send(const uint8_t *cmd, uint16_t len,
-                     uint8_t *out_data, uint16_t *out_data_len)
+static uint16_t send(const uint8_t *cmd, uint16_t len, uint8_t *out_data,
+                     uint16_t *out_data_len)
 {
     uint8_t  rsp[SCOS_APDU_RSP_MAX];
     uint16_t rsp_len = 0u;
 
-    CHECK_EQ(scos_process(&g_card, cmd, len, rsp, (uint16_t)sizeof(rsp),
-                          &rsp_len), SCOS_OK);
+    CHECK_EQ(
+        scos_process(&g_card, cmd, len, rsp, (uint16_t)sizeof(rsp), &rsp_len),
+        SCOS_OK);
     CHECK(rsp_len >= 2u);
     if (rsp_len < 2u) {
         return 0u;
@@ -61,8 +62,8 @@ static uint16_t send(const uint8_t *cmd, uint16_t len,
 #define FDB_EF_TRANSPARENT 0x01u
 #define FDB_DF             0x38u
 
-static uint16_t put_tlv(uint8_t *out, uint16_t n, uint8_t tag,
-                        const uint8_t *v, uint8_t vlen)
+static uint16_t put_tlv(uint8_t *out, uint16_t n, uint8_t tag, const uint8_t *v,
+                        uint8_t vlen)
 {
     out[n++] = tag;
     out[n++] = vlen;
@@ -76,13 +77,13 @@ static uint16_t put_tlv(uint8_t *out, uint16_t n, uint8_t tag,
 static uint16_t make_create(uint8_t *out, const uint8_t *body, uint8_t body_len)
 {
     uint16_t n = 0u;
-    out[n++] = 0x00u;
-    out[n++] = 0xE0u;
-    out[n++] = 0x00u;
-    out[n++] = 0x00u;
-    out[n++] = (uint8_t)(body_len + 2u);
-    out[n++] = 0x62u;
-    out[n++] = body_len;
+    out[n++]   = 0x00u;
+    out[n++]   = 0xE0u;
+    out[n++]   = 0x00u;
+    out[n++]   = 0x00u;
+    out[n++]   = (uint8_t)(body_len + 2u);
+    out[n++]   = 0x62u;
+    out[n++]   = body_len;
     for (uint8_t i = 0; i < body_len; i++) {
         out[n++] = body[i];
     }
@@ -90,18 +91,18 @@ static uint16_t make_create(uint8_t *out, const uint8_t *body, uint8_t body_len)
 }
 
 static uint16_t build_ef_body(uint8_t *body, uint16_t fid, uint16_t size,
-                             uint8_t sfi)
+                              uint8_t sfi)
 {
-    const uint8_t fdb[1]  = { FDB_EF_TRANSPARENT };
-    const uint8_t id[2]   = { (uint8_t)(fid >> 8), (uint8_t)fid };
-    const uint8_t sz[2]   = { (uint8_t)(size >> 8), (uint8_t)size };
-    uint16_t      n       = 0u;
-    n = put_tlv(body, n, 0x82u, fdb, 1u);
-    n = put_tlv(body, n, 0x83u, id,  2u);
-    n = put_tlv(body, n, 0x80u, sz,  2u);
+    const uint8_t fdb[1] = { FDB_EF_TRANSPARENT };
+    const uint8_t id[2]  = { (uint8_t)(fid >> 8), (uint8_t)fid };
+    const uint8_t sz[2]  = { (uint8_t)(size >> 8), (uint8_t)size };
+    uint16_t      n      = 0u;
+    n                    = put_tlv(body, n, 0x82u, fdb, 1u);
+    n                    = put_tlv(body, n, 0x83u, id, 2u);
+    n                    = put_tlv(body, n, 0x80u, sz, 2u);
     if (sfi != 0u) {
         const uint8_t s[1] = { (uint8_t)(sfi << 3) };
-        n = put_tlv(body, n, 0x88u, s, 1u);
+        n                  = put_tlv(body, n, 0x88u, s, 1u);
     }
     return n;
 }
@@ -111,15 +112,15 @@ static uint16_t build_df_body(uint8_t *body, uint16_t fid)
     const uint8_t fdb[1] = { FDB_DF };
     const uint8_t id[2]  = { (uint8_t)(fid >> 8), (uint8_t)fid };
     uint16_t      n      = 0u;
-    n = put_tlv(body, n, 0x82u, fdb, 1u);
-    n = put_tlv(body, n, 0x83u, id,  2u);
+    n                    = put_tlv(body, n, 0x82u, fdb, 1u);
+    n                    = put_tlv(body, n, 0x83u, id, 2u);
     return n;
 }
 
 static uint16_t create_ef(uint16_t fid, uint16_t size, uint8_t sfi)
 {
-    uint8_t  body[32];
-    uint8_t  apdu[64];
+    uint8_t        body[32];
+    uint8_t        apdu[64];
     const uint16_t bl = build_ef_body(body, fid, size, sfi);
     const uint16_t al = make_create(apdu, body, (uint8_t)bl);
     return send(apdu, al, NULL, NULL);
@@ -127,8 +128,8 @@ static uint16_t create_ef(uint16_t fid, uint16_t size, uint8_t sfi)
 
 static uint16_t create_df(uint16_t fid)
 {
-    uint8_t  body[32];
-    uint8_t  apdu[64];
+    uint8_t        body[32];
+    uint8_t        apdu[64];
     const uint16_t bl = build_df_body(body, fid);
     const uint16_t al = make_create(apdu, body, (uint8_t)bl);
     return send(apdu, al, NULL, NULL);
@@ -170,15 +171,17 @@ static uint16_t send_create_fcp(const uint8_t *inner, uint8_t inner_len)
 
 static uint16_t delete_file(uint16_t fid)
 {
-    const uint8_t apdu[] = { 0x00u, 0xE4u, 0x00u, 0x00u, 0x02u,
-                             (uint8_t)(fid >> 8), (uint8_t)fid };
+    const uint8_t apdu[] = { 0x00u,       0xE4u, 0x00u,
+                             0x00u,       0x02u, (uint8_t)(fid >> 8),
+                             (uint8_t)fid };
     return send(apdu, (uint16_t)sizeof(apdu), NULL, NULL);
 }
 
 static uint16_t select_fid(uint8_t p1, uint16_t fid)
 {
-    const uint8_t apdu[] = { 0x00u, 0xA4u, p1, 0x0Cu, 0x02u,
-                             (uint8_t)(fid >> 8), (uint8_t)fid };
+    const uint8_t apdu[] = { 0x00u,       0xA4u, p1,
+                             0x0Cu,       0x02u, (uint8_t)(fid >> 8),
+                             (uint8_t)fid };
     return send(apdu, (uint16_t)sizeof(apdu), NULL, NULL);
 }
 
@@ -195,8 +198,8 @@ TEST(create_an_ef_then_use_it)
     /* It is reachable, and it is an EF of the size we asked for. */
     CHECK_HEX(select_fid(0x02u, 0x2801u), SW_OK);
 
-    uint8_t  data[64];
-    uint16_t dlen = 0u;
+    uint8_t       data[64];
+    uint16_t      dlen    = 0u;
     const uint8_t write[] = { 0x00u, 0xD6u, 0x00u, 0x00u, 0x04u,
                               0xDEu, 0xADu, 0xBEu, 0xEFu };
     CHECK_HEX(send(write, (uint16_t)sizeof(write), NULL, NULL), SW_OK);
@@ -331,7 +334,9 @@ TEST(the_descriptor_table_has_a_hard_limit)
         CHECK_HEX(sw, SW_NOT_ENOUGH_SPACE);
         break;
     }
-    CHECK_EQ(created, FS_MAX_FILES - 5u);
+    /* Slots taken by the factory layout: MF, 2F00, 7F10, 6F01, 6F02, EF.ATR
+     * = 6, plus the one DF this test makes to hold the children. */
+    CHECK_EQ(created, FS_MAX_FILES - 6u);
 
     /* The card still works afterwards -- running out of slots must not be a
      * one-way trip into a broken state. */
@@ -388,24 +393,67 @@ TEST(delete_removes_the_file)
     CHECK_HEX(create_ef(0x2808u, 8u, 0u), SW_OK);
 }
 
-TEST(delete_frees_the_descriptor_slot_but_not_the_data)
+TEST(delete_frees_the_data_bytes_as_well_as_the_slot)
 {
-    /* KNOWN LIMITATION, asserted so it cannot regress silently: fs_store's
-     * data area is a bump allocator, so a deleted EF's bytes are leaked.
-     * Compaction needs atomic data movement, which needs the M4 journal. */
+    /*
+     * THIS ASSERTION IS THE REVERSE OF WHAT IT USED TO BE, and the reversal is
+     * the M4 fix landing.
+     *
+     * It read: "KNOWN LIMITATION, asserted so it cannot regress silently:
+     * fs_store's data area is a bump allocator, so a deleted EF's bytes are
+     * leaked. Compaction needs atomic data movement, which needs the M4
+     * journal." It was correct from M2b until now, and it is the reason the
+     * limitation never quietly became something worse.
+     *
+     * The fix turned out not to be compaction. Compaction moves live data, and
+     * the undo log for moving a large EF would not fit in a 2 KB journal -- so
+     * it would have to be incremental, leaving the card consistent but
+     * differently laid out between steps, for a benefit a card does not need.
+     * Instead the allocator derives its answer from the live descriptors, so a
+     * freed slot's extent simply stops being in use. Real card filesystems
+     * reuse free extents rather than defragmenting, because moving data on
+     * flash costs erase cycles and time.
+     */
     fresh();
     CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
 
     const uint32_t free_before = fs_store_data_free();
     CHECK_HEX(create_ef(0x2809u, 64u, 0u), SW_OK);
     const uint32_t free_after_create = fs_store_data_free();
-    CHECK(free_after_create < free_before);
+    CHECK_EQ(free_after_create, free_before - 64u);
 
     CHECK_HEX(delete_file(0x2809u), SW_OK);
-    CHECK_EQ(fs_store_data_free(), free_after_create); /* NOT reclaimed */
+    /* RECLAIMED, exactly and completely. */
+    CHECK_EQ(fs_store_data_free(), free_before);
 
-    /* The slot, however, is reusable. */
+    /* And the slot is reusable too. */
     CHECK_HEX(create_ef(0x280Au, 4u, 0u), SW_OK);
+}
+
+TEST(create_delete_cycles_do_not_exhaust_the_data_area)
+{
+    /*
+     * The consequence that made the leak worth fixing rather than documenting
+     * for ever. With 32 descriptor slots and a bump allocator, repeated
+     * create/delete of large files ran the 256 KB data area dry -- so a card
+     * doing ordinary personalisation churn would eventually refuse to create
+     * anything, with plenty of space apparently free.
+     *
+     * Sixty cycles of a 30 KB file is nearly 1.8 MB of allocation against a
+     * 256 KB area: impossible without reuse, and it now costs nothing.
+     */
+    fresh();
+    CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
+    const uint32_t free_at_start = fs_store_data_free();
+
+    for (unsigned n = 0; n < 60u; n++) {
+        CHECK_HEX(create_ef(0x2900u, 30000u, 0u), SW_OK);
+        CHECK_HEX(delete_file(0x2900u), SW_OK);
+    }
+
+    /* Back exactly where it started -- not merely "still working". */
+    CHECK_EQ(fs_store_data_free(), free_at_start);
+    CHECK_HEX(create_ef(0x2901u, 30000u, 0u), SW_OK);
 }
 
 TEST(delete_refuses_a_non_empty_df)
@@ -476,10 +524,15 @@ TEST(malformed_templates_are_refused)
     CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
 
     /* --- errors in the APDU framing itself: sent byte for byte ----------- */
-    struct { const uint8_t *a; uint16_t n; uint16_t sw; const char *why; } raw[] = {
+    struct {
+        const uint8_t *a;
+        uint16_t       n;
+        uint16_t       sw;
+        const char    *why;
+    } raw[] = {
         /* no data field at all */
-        { (const uint8_t[]){ 0x00, 0xE0, 0x00, 0x00, 0x00 }, 5,
-          SW_WRONG_LENGTH, "Case 1 CREATE" },
+        { (const uint8_t[]){ 0x00, 0xE0, 0x00, 0x00, 0x00 }, 5, SW_WRONG_LENGTH,
+          "Case 1 CREATE" },
         /* P1-P2 not 0000 -- reserved by ISO 7816-9 */
         { (const uint8_t[]){ 0x00, 0xE0, 0x01, 0x00, 0x02, 0x62, 0x00 }, 7,
           SW_INCORRECT_P1P2, "P1 set" },
@@ -487,17 +540,16 @@ TEST(malformed_templates_are_refused)
         { (const uint8_t[]){ 0x00, 0xE0, 0x00, 0x00, 0x02, 0x62, 0x00 }, 7,
           SW_WRONG_DATA, "empty FCP" },
         /* the template's length byte claims more than the APDU contains */
-        { (const uint8_t[]){ 0x00, 0xE0, 0x00, 0x00, 0x04, 0x62, 0x08,
-                             0x82, 0x01 }, 9,
-          SW_WRONG_DATA, "truncated inner object" },
+        { (const uint8_t[]){ 0x00, 0xE0, 0x00, 0x00, 0x04, 0x62, 0x08, 0x82,
+                             0x01 },
+          9, SW_WRONG_DATA, "truncated inner object" },
         /* indefinite length, which BER allows and we refuse */
-        { (const uint8_t[]){ 0x00, 0xE0, 0x00, 0x00, 0x03, 0x62, 0x80,
-                             0x00 }, 8,
-          SW_WRONG_DATA, "indefinite length" },
+        { (const uint8_t[]){ 0x00, 0xE0, 0x00, 0x00, 0x03, 0x62, 0x80, 0x00 },
+          8, SW_WRONG_DATA, "indefinite length" },
         /* Lc longer than the bytes that follow */
-        { (const uint8_t[]){ 0x00, 0xE0, 0x00, 0x00, 0x20, 0x62, 0x02,
-                             0x82, 0x01 }, 9,
-          SW_WRONG_LENGTH, "Lc overruns the frame" },
+        { (const uint8_t[]){ 0x00, 0xE0, 0x00, 0x00, 0x20, 0x62, 0x02, 0x82,
+                             0x01 },
+          9, SW_WRONG_LENGTH, "Lc overruns the frame" },
     };
     for (size_t i = 0; i < sizeof(raw) / sizeof(raw[0]); i++) {
         const uint16_t sw = send(raw[i].a, raw[i].n, NULL, NULL);
@@ -509,41 +561,46 @@ TEST(malformed_templates_are_refused)
     }
 
     /* --- well-framed APDUs carrying a bad template ----------------------- */
-    struct { const uint8_t *v; uint8_t n; uint16_t sw; const char *why; } inner[] = {
+    struct {
+        const uint8_t *v;
+        uint8_t        n;
+        uint16_t       sw;
+        const char    *why;
+    } inner[] = {
         /* file descriptor byte with b8 set: reserved, so malformed rather
          * than "a type we do not support" */
-        { (const uint8_t[]){ 0x82, 0x01, 0x81, 0x83, 0x02, 0x28, 0x11,
-                             0x80, 0x02, 0x00, 0x10 }, 11,
-          SW_WRONG_DATA, "FDB b8 set" },
+        { (const uint8_t[]){ 0x82, 0x01, 0x81, 0x83, 0x02, 0x28, 0x11, 0x80,
+                             0x02, 0x00, 0x10 },
+          11, SW_WRONG_DATA, "FDB b8 set" },
         /* a DF that also declares an EF structure: self-contradictory */
         { (const uint8_t[]){ 0x82, 0x01, 0x39, 0x83, 0x02, 0x7F, 0x34 }, 7,
           SW_WRONG_DATA, "DF with a structure" },
         /* no file identifier */
-        { (const uint8_t[]){ 0x82, 0x01, 0x01 }, 3,
-          SW_WRONG_DATA, "missing tag 83" },
+        { (const uint8_t[]){ 0x82, 0x01, 0x01 }, 3, SW_WRONG_DATA,
+          "missing tag 83" },
         /* no file descriptor byte */
-        { (const uint8_t[]){ 0x83, 0x02, 0x28, 0x11, 0x80, 0x02, 0x00, 0x10 }, 8,
-          SW_WRONG_DATA, "missing tag 82" },
+        { (const uint8_t[]){ 0x83, 0x02, 0x28, 0x11, 0x80, 0x02, 0x00, 0x10 },
+          8, SW_WRONG_DATA, "missing tag 82" },
         /* file identifier of the wrong length */
         { (const uint8_t[]){ 0x82, 0x01, 0x01, 0x83, 0x01, 0x28 }, 6,
           SW_WRONG_DATA, "1-byte FID" },
         /* two file identifiers: which one wins? neither. */
-        { (const uint8_t[]){ 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x12,
-                             0x83, 0x02, 0x28, 0x13, 0x80, 0x02, 0x00, 0x10 }, 15,
-          SW_WRONG_DATA, "duplicate tag 83" },
+        { (const uint8_t[]){ 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x12, 0x83,
+                             0x02, 0x28, 0x13, 0x80, 0x02, 0x00, 0x10 },
+          15, SW_WRONG_DATA, "duplicate tag 83" },
         /* two descriptor bytes */
-        { (const uint8_t[]){ 0x82, 0x01, 0x01, 0x82, 0x01, 0x38,
-                             0x83, 0x02, 0x28, 0x12 }, 10,
-          SW_WRONG_DATA, "duplicate tag 82" },
+        { (const uint8_t[]){ 0x82, 0x01, 0x01, 0x82, 0x01, 0x38, 0x83, 0x02,
+                             0x28, 0x12 },
+          10, SW_WRONG_DATA, "duplicate tag 82" },
         /* SFI with the reserved low bits set */
-        { (const uint8_t[]){ 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x14,
-                             0x80, 0x02, 0x00, 0x08, 0x88, 0x01, 0x09 }, 14,
-          SW_WRONG_DATA, "SFI low bits set" },
+        { (const uint8_t[]){ 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x14, 0x80,
+                             0x02, 0x00, 0x08, 0x88, 0x01, 0x09 },
+          14, SW_WRONG_DATA, "SFI low bits set" },
         /* SFI 31: encodable in the byte, but outside ISO's 1..30 and not
          * addressable by READ BINARY's 5-bit field */
-        { (const uint8_t[]){ 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x14,
-                             0x80, 0x02, 0x00, 0x08, 0x88, 0x01, 0xF8 }, 14,
-          SW_WRONG_DATA, "SFI 31" },
+        { (const uint8_t[]){ 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x14, 0x80,
+                             0x02, 0x00, 0x08, 0x88, 0x01, 0xF8 },
+          14, SW_WRONG_DATA, "SFI 31" },
         /* a zero-length descriptor byte */
         { (const uint8_t[]){ 0x82, 0x00, 0x83, 0x02, 0x28, 0x14 }, 6,
           SW_WRONG_DATA, "empty tag 82" },
@@ -561,13 +618,13 @@ TEST(malformed_templates_are_refused)
      * which of the two templates to honour, so we honour neither. */
     {
         const uint8_t body[] = { 0x62, 0x07, 0x82, 0x01, 0x38, 0x83, 0x02,
-                                 0x7F, 0x30,
-                                 0x83, 0x02, 0x00, 0x01 };
+                                 0x7F, 0x30, 0x83, 0x02, 0x00, 0x01 };
         CHECK_HEX(send_create_raw(body, (uint8_t)sizeof(body)), SW_WRONG_DATA);
     }
 
     /* None of that created anything. */
-    CHECK_EQ(fs_child_count(fs_root_index()), 2); /* factory: EF 2F00, DF 7F10 */
+    CHECK_EQ(fs_child_count(fs_root_index()),
+             3); /* factory: EF 2F00, DF 7F10, EF.ATR 2F01 */
 }
 
 TEST(unknown_tags_are_refused_not_ignored)
@@ -584,16 +641,62 @@ TEST(unknown_tags_are_refused_not_ignored)
     fresh();
     CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
 
-    const uint8_t with_8c[] = { 0x82, 0x01, 0x01,
-                                0x83, 0x02, 0x28, 0x15,
-                                0x80, 0x02, 0x00, 0x10,
-                                0x8C, 0x02, 0x01, 0xFF }; /* 8C = access cond */
+    /*
+     * Tag 8C, ISO's COMPACT security-attribute format.
+     *
+     * Now answered 6A81 rather than 6A80, and the change of status word is the
+     * point rather than a relaxation. 6A80 says "your data field is bad"; 8C
+     * is a perfectly valid tag, so that was never true. 6A81 says the card
+     * understands the tag and does not implement it, which is exactly the
+     * situation -- and it tells a caller to use tag 86 instead of hunting for
+     * an error in a template that has none.
+     *
+     * Still refused, and refusing is still the whole point: 8C's access-mode
+     * byte assigns bits to operations, this project does not have the
+     * specification text to state those positions, and a card that accepted
+     * the template while misreading them would create a file whose protection
+     * is not the protection that was asked for -- and answer 9000 while doing
+     * it.
+     */
+    const uint8_t with_8c[] = { 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x15, 0x80,
+                                0x02, 0x00, 0x10, 0x8C, 0x02, 0x01, 0xFF };
     CHECK_HEX(send_create_fcp(with_8c, (uint8_t)sizeof(with_8c)),
-              SW_WRONG_DATA);
+              SW_FUNC_NOT_SUPPORTED);
     /* And nothing was created, so the client cannot end up with an
      * unprotected file it believes is protected. */
     const uint16_t sw = select_fid(0x02u, 0x2815u);
     CHECK_HEX(sw, SW_FILE_NOT_FOUND);
+}
+
+TEST(all_three_access_conditions_round_trip)
+{
+    /*
+     * A field-by-field guard, added because ac_admin was once dropped between
+     * the template and NVM while ac_read and ac_update were copied correctly.
+     * The symptom was a file that answered 9000 to "protect this against
+     * deletion" and could then be deleted by anyone -- the exact failure the
+     * refuse-what-you-do-not-understand rule exists to prevent, reintroduced
+     * by adding a struct field without its copy.
+     *
+     * Three distinct values, so a copy that assigns the wrong source field is
+     * caught as well as one that assigns nothing.
+     */
+    fresh();
+    CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
+
+    const uint8_t tmpl[] = { 0x82, 0x01,         0x01,         0x83,
+                             0x02, 0x29,         0x01,         0x80,
+                             0x02, 0x00,         0x10,         0x86,
+                             0x03, FS_AC_ALWAYS, FS_AC_PIN(1), FS_AC_NEVER };
+    CHECK_HEX(send_create_fcp(tmpl, (uint8_t)sizeof(tmpl)), SW_OK);
+
+    uint16_t idx = FS_INVALID_INDEX;
+    CHECK_EQ(fs_find_child(fs_root_index(), 0x2901u, &idx), FS_OK);
+    fs_descriptor d;
+    CHECK_EQ(fs_get(idx, &d), FS_OK);
+    CHECK_HEX(d.ac_read, FS_AC_ALWAYS);
+    CHECK_HEX(d.ac_update, FS_AC_PIN(1));
+    CHECK_HEX(d.ac_admin, FS_AC_NEVER);
 }
 
 TEST(unsupported_iso_file_types_say_so)
@@ -604,15 +707,13 @@ TEST(unsupported_iso_file_types_say_so)
     /* Linear fixed (structure 010) and internal EF (type 001) are real ISO
      * file types we do not implement. 6A81 distinguishes "not implemented"
      * from "your template is broken", which 6A80 would not. */
-    const uint8_t linear[] = { 0x82, 0x01, 0x02,
-                               0x83, 0x02, 0x28, 0x16,
-                               0x80, 0x02, 0x00, 0x10 };
+    const uint8_t linear[] = { 0x82, 0x01, 0x02, 0x83, 0x02, 0x28,
+                               0x16, 0x80, 0x02, 0x00, 0x10 };
     CHECK_HEX(send_create_fcp(linear, (uint8_t)sizeof(linear)),
               SW_FUNC_NOT_SUPPORTED);
 
-    const uint8_t internal[] = { 0x82, 0x01, 0x09,
-                                 0x83, 0x02, 0x28, 0x17,
-                                 0x80, 0x02, 0x00, 0x10 };
+    const uint8_t internal[] = { 0x82, 0x01, 0x09, 0x83, 0x02, 0x28,
+                                 0x17, 0x80, 0x02, 0x00, 0x10 };
     CHECK_HEX(send_create_fcp(internal, (uint8_t)sizeof(internal)),
               SW_FUNC_NOT_SUPPORTED);
 }
@@ -623,22 +724,19 @@ TEST(type_and_size_must_agree)
     CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
 
     /* An EF with no declared size. */
-    const uint8_t ef_no_size[] = { 0x82, 0x01, 0x01,
-                                   0x83, 0x02, 0x28, 0x18 };
+    const uint8_t ef_no_size[] = { 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x18 };
     CHECK_HEX(send_create_fcp(ef_no_size, (uint8_t)sizeof(ef_no_size)),
               SW_WRONG_DATA);
 
     /* A DF that declares data bytes. */
-    const uint8_t df_with_size[] = { 0x82, 0x01, 0x38,
-                                     0x83, 0x02, 0x7F, 0x31,
-                                     0x80, 0x02, 0x00, 0x10 };
+    const uint8_t df_with_size[] = { 0x82, 0x01, 0x38, 0x83, 0x02, 0x7F,
+                                     0x31, 0x80, 0x02, 0x00, 0x10 };
     CHECK_HEX(send_create_fcp(df_with_size, (uint8_t)sizeof(df_with_size)),
               SW_WRONG_DATA);
 
     /* A DF with a short EF identifier. */
-    const uint8_t df_with_sfi[] = { 0x82, 0x01, 0x38,
-                                    0x83, 0x02, 0x7F, 0x32,
-                                    0x88, 0x01, 0x08 };
+    const uint8_t df_with_sfi[] = { 0x82, 0x01, 0x38, 0x83, 0x02,
+                                    0x7F, 0x32, 0x88, 0x01, 0x08 };
     CHECK_HEX(send_create_fcp(df_with_sfi, (uint8_t)sizeof(df_with_sfi)),
               SW_WRONG_DATA);
 
@@ -653,9 +751,8 @@ TEST(a_bare_fcp_without_the_62_wrapper_also_works)
      * accepting both is not laxity. */
     fresh();
     CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
-    const uint8_t bare[] = { 0x82, 0x01, 0x01,
-                             0x83, 0x02, 0x28, 0x1A,
-                             0x80, 0x02, 0x00, 0x10 };
+    const uint8_t bare[] = { 0x82, 0x01, 0x01, 0x83, 0x02, 0x28,
+                             0x1A, 0x80, 0x02, 0x00, 0x10 };
     CHECK_HEX(send_create_raw(bare, (uint8_t)sizeof(bare)), SW_OK);
     CHECK_HEX(select_fid(0x02u, 0x281Au), SW_OK);
 }
@@ -665,28 +762,35 @@ TEST(lifecycle_can_be_requested_and_is_honoured)
     fresh();
     CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
 
-    /* Created DEACTIVATED (04): the file exists but is not usable, which must
-     * be visible as 6985 rather than 6A82. */
-    const uint8_t deact[] = { 0x82, 0x01, 0x01,
-                              0x83, 0x02, 0x28, 0x1B,
-                              0x80, 0x02, 0x00, 0x10,
-                              0x8A, 0x01, 0x04 };
+    /*
+     * Created DEACTIVATED (04). The file exists and can be SELECTED -- which
+     * is what makes ACTIVATE FILE able to reach it -- but cannot be read.
+     *
+     * Selection used to be refused here with 6985. That made a file created
+     * deactivated permanently dead: nothing could name it, so nothing could
+     * activate it. Selection is now navigation and grants nothing; the gate is
+     * on data access. See resolve_selectable() in src/filesystem/fs.c.
+     */
+    const uint8_t deact[] = { 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x1B,
+                              0x80, 0x02, 0x00, 0x10, 0x8A, 0x01, 0x04 };
     CHECK_HEX(send_create_fcp(deact, (uint8_t)sizeof(deact)), SW_OK);
-    CHECK_HEX(select_fid(0x02u, 0x281Bu), SW_CONDITIONS_NOT_SATISFIED);
+    CHECK_HEX(select_fid(0x02u, 0x281Bu), SW_OK);
+
+    /* ...and reading it is still refused, which is the property that matters.
+     * 6985 "conditions not satisfied", not 6A82: the file is there. */
+    const uint8_t read4[] = { 0x00u, 0xB0u, 0x00u, 0x00u, 0x04u };
+    CHECK_HEX(send(read4, (uint16_t)sizeof(read4), NULL, NULL),
+              SW_CONDITIONS_NOT_SATISFIED);
 
     /* TERMINATED (0C) is irreversible, so creating something already dead is
      * refused rather than honoured. */
-    const uint8_t term[] = { 0x82, 0x01, 0x01,
-                             0x83, 0x02, 0x28, 0x1C,
-                             0x80, 0x02, 0x00, 0x10,
-                             0x8A, 0x01, 0x0C };
+    const uint8_t term[] = { 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x1C,
+                             0x80, 0x02, 0x00, 0x10, 0x8A, 0x01, 0x0C };
     CHECK_HEX(send_create_fcp(term, (uint8_t)sizeof(term)), SW_WRONG_DATA);
 
     /* An undefined life cycle byte is a data error, not something to default. */
-    const uint8_t bogus[] = { 0x82, 0x01, 0x01,
-                              0x83, 0x02, 0x28, 0x1D,
-                              0x80, 0x02, 0x00, 0x10,
-                              0x8A, 0x01, 0x77 };
+    const uint8_t bogus[] = { 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x1D,
+                              0x80, 0x02, 0x00, 0x10, 0x8A, 0x01, 0x77 };
     CHECK_HEX(send_create_fcp(bogus, (uint8_t)sizeof(bogus)), SW_WRONG_DATA);
 }
 
@@ -710,7 +814,7 @@ TEST(create_inside_a_deactivated_df_is_refused)
     /* Cannot even select it, so reach it through fs_create_file directly with
      * a selection that points at it -- the check must live in the filesystem
      * layer, not only in the command handler. */
-    fs_selection sel = { idx, FS_INVALID_INDEX };
+    fs_selection  sel = { idx, FS_INVALID_INDEX };
     fs_descriptor req;
     os_memset(&req, 0, sizeof(req));
     req.file_id   = 0x6F41u;
@@ -733,7 +837,8 @@ int main(void)
     RUN(the_descriptor_table_has_a_hard_limit);
     RUN(running_out_of_data_space_is_clean);
     RUN(delete_removes_the_file);
-    RUN(delete_frees_the_descriptor_slot_but_not_the_data);
+    RUN(delete_frees_the_data_bytes_as_well_as_the_slot);
+    RUN(create_delete_cycles_do_not_exhaust_the_data_area);
     RUN(delete_refuses_a_non_empty_df);
     RUN(delete_refuses_the_mf);
     RUN(delete_only_reaches_children_of_the_current_df);
@@ -741,6 +846,7 @@ int main(void)
     RUN(delete_of_a_missing_file_is_reported);
     RUN(malformed_templates_are_refused);
     RUN(unknown_tags_are_refused_not_ignored);
+    RUN(all_three_access_conditions_round_trip);
     RUN(unsupported_iso_file_types_say_so);
     RUN(type_and_size_must_agree);
     RUN(a_bare_fcp_without_the_62_wrapper_also_works);

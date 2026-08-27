@@ -27,6 +27,8 @@
 #include "apdu/dispatch.h"
 #include "apdu/sw.h"
 #include "filesystem/fs.h"
+#include "security/ac.h"
+#include "os/scos_config.h"
 #include "os/os_mem.h"
 
 #define P1_SFI_FLAG 0x80u
@@ -95,41 +97,122 @@ uint16_t scos_cmd_read_binary(scos_kernel *k, const apdu_command *cmd,
         return SW_WRONG_LENGTH; /* 6700 */
     }
 
-    uint16_t index  = FS_INVALID_INDEX;
-    uint16_t offset = 0u;
+    uint16_t       index  = FS_INVALID_INDEX;
+    uint16_t       offset = 0u;
     const uint16_t rsw = resolve_target(k, cmd->p1, cmd->p2, &index, &offset);
     if (rsw != SW_OK) {
         return rsw;
     }
 
-    /* Le is 1..256, and the response buffer is sized for the maximum, so the
-     * read cannot overflow it. Asserted rather than assumed. */
-    uint8_t  buf[APDU_SHORT_LE_MAX];
-    if (cmd->le > sizeof(buf)) {
-        return SW_NO_PRECISE_DIAGNOSIS;
-    }
-
-    uint16_t got = 0u;
-    const fs_status st =
-        fs_ef_read(index, offset, cmd->le, buf, &got);
-    if (st != FS_OK) {
-        return scos_fs_error_to_sw(st);
-    }
-
-    if (!apdu_rsp_put(rsp, buf, got)) {
-        return SW_NO_PRECISE_DIAGNOSIS;
+    /*
+     * The access check, and its position is deliberate: AFTER the file is
+     * resolved and BEFORE a single byte is read.
+     *
+     * After, because a check needs to know which file it is protecting -- and
+     * the answer for a file that does not exist is 6A82, not 6982; reporting
+     * "not authorised" for a nonexistent file tells an attacker the file is
+     * there.
+     *
+     * Before, because the only useful moment to refuse a read is before the
+     * data leaves NVM.
+     */
+    {
+        fs_descriptor   d;
+        const fs_status gst = fs_get(index, &d);
+        if (gst != FS_OK) {
+            return scos_fs_error_to_sw(gst);
+        }
+        if (!scos_ac_permits(k->auth, &d, AC_OP_READ)) {
+            return SW_SECURITY_NOT_SATISFIED; /* 6982 */
+        }
     }
 
     /*
-     * Short read. ISO/IEC 7816-4: when fewer bytes are available than Le, the
-     * card returns what it has together with 6282, "end of file reached before
-     * reading Le bytes". A warning, not an error -- the data in the response is
-     * valid and the caller should use it.
+     * How much we will actually return.
      *
-     * Returning 9000 here instead would be a small lie that a client cannot
-     * detect, since it has no other way to learn the file was shorter.
+     * A short Le is at most 256 and always fits. An extended Le reaches 65536,
+     * which no response buffer here can hold, so it is CLAMPED to the
+     * response capacity rather than refused. Le is defined as the MAXIMUM
+     * number of bytes expected (ISO/IEC 7816-4 s.5.3.3), so returning fewer is
+     * permitted -- and for READ BINARY it costs the reader nothing, because
+     * the command is offset-addressed: it simply reads again from a higher
+     * offset. Refusing would leave a reader that asked for "everything" with
+     * no data at all.
+     *
+     * The clamp must stay distinguishable from end-of-file, which is what the
+     * two exits at the bottom are about.
      */
-    if (got < cmd->le) {
+    uint32_t want = cmd->le;
+    if (want > SCOS_APDU_EXT_DATA_MAX) {
+        want = SCOS_APDU_EXT_DATA_MAX;
+    }
+
+    /*
+     * Read in chunks through a small stack buffer instead of one buffer big
+     * enough for `want`.
+     *
+     * A uint8_t buf[SCOS_APDU_EXT_DATA_MAX] would put 1 KB in this frame, and
+     * stack is the one kind of RAM the project does NOT account for --
+     * _Static_assert measures sizeof(scos_kernel), so a large local is invisible
+     * to the budget it would blow. Chunking bounds this frame to CHUNK bytes
+     * whatever the ceiling is later set to.
+     */
+    enum { CHUNK = 64u };
+    uint8_t  buf[CHUNK];
+    uint32_t done = 0u;
+    bool     eof  = false;
+
+    while (done < want) {
+        uint32_t ask = want - done;
+        if (ask > CHUNK) {
+            ask = CHUNK;
+        }
+
+        /* offset is uint16_t in the filesystem API, and an EF cannot exceed
+         * 32767 bytes, so offset + done cannot overflow it. Checked rather
+         * than trusted, because the cost is one comparison. */
+        if ((uint32_t)offset + done > 0xFFFFu) {
+            return SW_WRONG_P1P2;
+        }
+
+        uint16_t        got = 0u;
+        const fs_status st =
+            fs_ef_read((uint16_t)index, (uint16_t)((uint32_t)offset + done),
+                       (uint16_t)ask, buf, &got);
+        if (st != FS_OK) {
+            return scos_fs_error_to_sw(st);
+        }
+        if (!apdu_rsp_put(rsp, buf, got)) {
+            return SW_NO_PRECISE_DIAGNOSIS;
+        }
+        done += got;
+
+        if (got < ask) {
+            /* The file ended inside this chunk. Stop; do not loop forever
+             * asking for bytes that do not exist. */
+            eof = true;
+            break;
+        }
+    }
+
+    /*
+     * Two different reasons for returning fewer bytes than Le, and a reader
+     * that cannot tell them apart cannot behave correctly:
+     *
+     *   6282  the FILE ended. Reading again at a higher offset yields nothing.
+     *         ISO/IEC 7816-4: "end of file reached before reading Le bytes".
+     *         A warning, not an error -- the data returned is valid.
+     *
+     *   9000  the CARD stopped, having clamped an extended Le to what it can
+     *         send. The file may well continue; reading again from
+     *         offset + returned length is the right next move.
+     *
+     * Collapsing these into one answer is the tempting simplification and it
+     * is wrong in both directions: 6282 after a clamp would report a file as
+     * shorter than it is, and 9000 at real EOF would send a reader round a
+     * loop that never terminates.
+     */
+    if (eof) {
         return SW_NVM_UNCHANGED_EOF; /* 6282 */
     }
     return SW_OK;
@@ -152,22 +235,24 @@ uint16_t scos_cmd_update_binary(scos_kernel *k, const apdu_command *cmd,
         return SW_WRONG_LENGTH;
     }
 
-    uint16_t index  = FS_INVALID_INDEX;
-    uint16_t offset = 0u;
+    uint16_t       index  = FS_INVALID_INDEX;
+    uint16_t       offset = 0u;
     const uint16_t rsw = resolve_target(k, cmd->p1, cmd->p2, &index, &offset);
     if (rsw != SW_OK) {
         return rsw;
     }
 
-    /*
-     * ACCESS CONTROL IS NOT YET ENFORCED.
-     *
-     * Any reader that can reach this command can write any file. The
-     * descriptor already carries ac_read/ac_update, and M3 enforces them here
-     * and in READ BINARY. Until then this card protects nothing, which is
-     * stated plainly in docs/filesystem.md and docs/threat-model.md rather
-     * than left for someone to discover.
-     */
+    /* The write condition, checked before anything reaches NVM. */
+    {
+        fs_descriptor   d;
+        const fs_status gst = fs_get(index, &d);
+        if (gst != FS_OK) {
+            return scos_fs_error_to_sw(gst);
+        }
+        if (!scos_ac_permits(k->auth, &d, AC_OP_UPDATE)) {
+            return SW_SECURITY_NOT_SATISFIED; /* 6982 */
+        }
+    }
 
     /* fs_ef_write() refuses a partial write outright: without transactions
      * there is no way to undo half of one. */

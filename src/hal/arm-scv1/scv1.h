@@ -22,7 +22,7 @@
  *     therefore QEMU) provides.
  *
  * The point of SCV1 is to have a target that is honestly specified. When
- * real hardware documentation arrives, src/hal/samsung/ gets written
+ * real hardware documentation arrives, src/hal/s3m228a/ gets written
  * against it and this stays as the reference target.
  * ======================================================================
  */
@@ -43,8 +43,8 @@
  * EEPROM/DFLASH geometry is kept identical to the native simulator so the same
  * filesystem image is valid on both.
  */
-#define SCV1_CODE_BASE    0x00000000u
-#define SCV1_CODE_SIZE    (64u * 1024u)
+#define SCV1_CODE_BASE 0x00000000u
+#define SCV1_CODE_SIZE (64u * 1024u)
 
 /*
  * CODE is not one flat lump. A chip that can be shipped blank and programmed
@@ -74,22 +74,22 @@
 #define SCV1_OSFLASH_BASE 0x00002000u
 #define SCV1_OSFLASH_SIZE (55u * 1024u)
 
-#define SCV1_OSHDR_BASE   0x0000FC00u
-#define SCV1_OSHDR_SIZE   1024u
+#define SCV1_OSHDR_BASE 0x0000FC00u
+#define SCV1_OSHDR_SIZE 1024u
 
 /* Code flash erases a page at a time and can only clear bits; see cflash.h. */
-#define SCV1_CFLASH_PAGE  1024u
+#define SCV1_CFLASH_PAGE 1024u
 
-#define SCV1_EEPROM_BASE  0x00010000u
-#define SCV1_EEPROM_SIZE  (16u * 1024u)
-#define SCV1_EEPROM_PAGE  4u
+#define SCV1_EEPROM_BASE 0x00010000u
+#define SCV1_EEPROM_SIZE (16u * 1024u)
+#define SCV1_EEPROM_PAGE 4u
 
-#define SCV1_DFLASH_BASE  0x00014000u
-#define SCV1_DFLASH_SIZE  (256u * 1024u)
-#define SCV1_DFLASH_PAGE  256u
+#define SCV1_DFLASH_BASE 0x00014000u
+#define SCV1_DFLASH_SIZE (256u * 1024u)
+#define SCV1_DFLASH_PAGE 256u
 
-#define SCV1_SRAM_BASE    0x20000000u
-#define SCV1_SRAM_SIZE    (16u * 1024u)
+#define SCV1_SRAM_BASE 0x20000000u
+#define SCV1_SRAM_SIZE (16u * 1024u)
 
 /* ------------------------------------------------------------ peripherals -- */
 
@@ -118,12 +118,12 @@
 /* Vector Table Offset Register -- ARMv7-M core peripheral (SCB->VTOR), address
  * fixed by the architecture. The boot loader writes it to relocate the vector
  * table from BOOTROM to the loaded OS before jumping. */
-#define SCV1_SCB_VTOR     (*(volatile uint32_t *)0xE000ED08u)
+#define SCV1_SCB_VTOR (*(volatile uint32_t *)0xE000ED08u)
 
 /* SysTick -- ARMv7-M core peripheral, address fixed by the architecture. */
-#define SCV1_SYSTICK_CSR  (*(volatile uint32_t *)0xE000E010u)
-#define SCV1_SYSTICK_RVR  (*(volatile uint32_t *)0xE000E014u)
-#define SCV1_SYSTICK_CVR  (*(volatile uint32_t *)0xE000E018u)
+#define SCV1_SYSTICK_CSR (*(volatile uint32_t *)0xE000E010u)
+#define SCV1_SYSTICK_RVR (*(volatile uint32_t *)0xE000E014u)
+#define SCV1_SYSTICK_CVR (*(volatile uint32_t *)0xE000E018u)
 
 #define SCV1_SYSTICK_ENABLE    0x1u
 #define SCV1_SYSTICK_TICKINT   0x2u

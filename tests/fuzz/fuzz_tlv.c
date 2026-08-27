@@ -16,7 +16,7 @@ static void walk(const uint8_t *buf, uint16_t len, unsigned depth)
 
     unsigned guard = 0u;
     for (;;) {
-        tlv_object o;
+        tlv_object       o;
         const tlv_status st = tlv_next(&r, &o);
         if (st != TLV_OK) {
             /* Any non-OK status must leave the reader exhausted, so this loop
@@ -24,7 +24,7 @@ static void walk(const uint8_t *buf, uint16_t len, unsigned depth)
             break;
         }
         if (++guard > 4096u) {
-            __builtin_trap();   /* the parser failed to make progress */
+            __builtin_trap(); /* the parser failed to make progress */
         }
 
         if (o.length > 0u) {

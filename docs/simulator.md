@@ -182,10 +182,22 @@ Implemented in Milestone 1:
 | warm reset (`.reset`) | clear volatile state, keep NVM, re-emit the ATR |
 | power off (`.quit`, EOF) | flush NVM durably, exit 0 |
 
-Milestone 4 adds `POWER_FAILURE`, which differs from power-off in exactly the
-way that matters: it **skips the durability flush** and can stop part way
-through a write, so an interrupted write stays interrupted across a restart.
-That is what makes tear-resistance testable.
+`vcard_power_failure()` differs from power-off in exactly the way that
+matters: it **skips the durability flush**, so unflushed writes are lost. And
+`vcard_fault_after_bytes(n)` makes the next `hal_nvm_write()` store `n` bytes
+and then report `HAL_ERR_POWER` -- the bytes before the cut are **real and stay
+in the array**, because that is what a half-programmed page looks like. The OS
+has to recover from partial data, not from an untouched region.
 
-Until then, `hal_nvm_write` is an atomic `memcpy` -- the optimistic case -- so
-**nothing in this project may yet claim to have tested tear-resistance.**
+Together they are what makes tear resistance measurable rather than asserted.
+Without the byte-level cut, an interruption test can only check offset 0 and
+offset N, which is close to checking nothing;
+`tests/unit/test_journal.c` cuts CREATE FILE and UPDATE BINARY at **every**
+byte offset.
+
+Two limits worth stating. This model discards the whole session's unflushed
+writes where a real chip loses only the write in flight, which makes it
+**stricter** than the hardware -- the safe direction for a test, but a pass
+here is not a substitute for silicon. And fault injection is simulator-only, so
+the ARM target runs the same OS code and cannot cut a write mid-flight; an ARM
+equivalent needs the hook in `hal_arm_nvm.c`.

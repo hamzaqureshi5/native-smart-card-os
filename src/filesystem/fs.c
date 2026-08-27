@@ -18,14 +18,13 @@
  * requires a search, and a corrupt slot 0 is immediately recognisable. */
 #define FS_ROOT_INDEX 0u
 
-uint16_t fs_root_index(void) { return FS_ROOT_INDEX; }
+uint16_t fs_root_index(void)
+{ return FS_ROOT_INDEX; }
 
 /* ------------------------------------------------------------ inspection --- */
 
 fs_status fs_get(uint16_t index, fs_descriptor *out)
-{
-    return fs_store_read_desc(index, out);
-}
+{ return fs_store_read_desc(index, out); }
 
 fs_status fs_find_child(uint16_t parent, uint16_t file_id, uint16_t *out_index)
 {
@@ -36,7 +35,7 @@ fs_status fs_find_child(uint16_t parent, uint16_t file_id, uint16_t *out_index)
 
     const uint16_t n = fs_store_max_files();
     for (uint16_t i = 0; i < n; i++) {
-        fs_descriptor d;
+        fs_descriptor   d;
         const fs_status st = fs_store_read_desc(i, &d);
         if (st == FS_ERR_NOT_FOUND) {
             continue; /* free slot */
@@ -85,8 +84,8 @@ fs_status fs_find_by_sfi(uint16_t df, uint8_t sfi, uint16_t *out_index)
 
 uint16_t fs_child_count(uint16_t parent)
 {
-    uint16_t count = 0u;
-    const uint16_t n = fs_store_max_files();
+    uint16_t       count = 0u;
+    const uint16_t n     = fs_store_max_files();
     for (uint16_t i = 0; i < n; i++) {
         fs_descriptor d;
         if (fs_store_read_desc(i, &d) != FS_OK) {
@@ -138,7 +137,8 @@ static void commit(fs_selection *sel, uint16_t index, const fs_descriptor *d)
 }
 
 /* Resolve-and-check helper: load the descriptor and refuse anything not
- * ACTIVATED, so lifecycle state is enforced in exactly one place. */
+ * ACTIVATED, so lifecycle state is enforced in exactly one place. Used by the
+ * DATA paths, where a deactivated file must behave as if it were not there. */
 static fs_status resolve(uint16_t index, fs_descriptor *out)
 {
     const fs_status st = fs_store_read_desc(index, out);
@@ -149,6 +149,77 @@ static fs_status resolve(uint16_t index, fs_descriptor *out)
         return FS_ERR_NOT_USABLE;
     }
     return FS_OK;
+}
+
+/*
+ * The SELECTION paths use this instead, and the difference is the whole reason
+ * ACTIVATE FILE can exist.
+ *
+ * DEACTIVATED is defined by ISO as a REVERSIBLE state, and the only way to
+ * reverse it is to name the file -- which, for ACTIVATE FILE with P1=00, means
+ * selecting it. While selection refused deactivated files, deactivation was a
+ * one-way door: a file could be turned off by an APDU and turned back on only
+ * by rewriting its descriptor from inside the OS. That is the boot loader's
+ * ACTIVE-slot bug one layer up, and it was pinned by a test whose own comment
+ * claimed the state was reversible.
+ *
+ * So selection is navigation and inspection, and grants nothing on its own.
+ * The gate that matters is on data access, and it is strictly stronger than it
+ * was before: fs_ef_read/fs_ef_write now also walk the ancestors, so a
+ * deactivated DF genuinely blocks its subtree rather than only itself.
+ *
+ * TERMINATED is still refused. It is irreversible by design, so there is no
+ * administrative action left to take, and refusing keeps the distinction
+ * between 6A82 "not found" and 6985 "not usable" meaningful. CREATION and
+ * INITIALISED are refused too: a file mid-personalisation is not something the
+ * rest of the OS is built to handle.
+ */
+static fs_status resolve_selectable(uint16_t index, fs_descriptor *out)
+{
+    const fs_status st = fs_store_read_desc(index, out);
+    if (st != FS_OK) {
+        return st;
+    }
+    if (out->lifecycle != FS_LC_ACTIVATED &&
+        out->lifecycle != FS_LC_DEACTIVATED) {
+        return FS_ERR_NOT_USABLE;
+    }
+    return FS_OK;
+}
+
+/*
+ * Every ancestor of `d` must be usable, or `d` is not reachable.
+ *
+ * Without this, DEACTIVATE FILE on a DF would be a lie: the DF would refuse
+ * selection-free operations while every EF inside it stayed readable, so an
+ * administrator who deactivated a directory to take an application out of
+ * service would have taken nothing out of service.
+ *
+ * Bounded by FS_MAX_FILES rather than by reaching the root, so a descriptor
+ * image whose parent pointers form a cycle -- which a corrupt or hostile NVM
+ * image can produce -- terminates instead of looping forever. That is why the
+ * loop counts.
+ */
+static fs_status ancestors_usable(const fs_descriptor *d)
+{
+    uint16_t parent = d->parent;
+    for (uint16_t hops = 0; hops < FS_MAX_FILES; hops++) {
+        if (parent == FS_NO_PARENT || parent == FS_INVALID_INDEX) {
+            return FS_OK; /* reached the root */
+        }
+        fs_descriptor   p;
+        const fs_status st = fs_store_read_desc(parent, &p);
+        if (st != FS_OK) {
+            return st;
+        }
+        if (!fs_is_usable(&p)) {
+            return FS_ERR_NOT_USABLE;
+        }
+        parent = p.parent;
+    }
+    /* More hops than there are files: the parent chain is cyclic. Report it as
+     * a corrupt image rather than as a lifecycle problem. */
+    return FS_ERR_CORRUPT;
 }
 
 fs_status fs_select_by_fid(fs_selection *sel, uint16_t file_id)
@@ -201,7 +272,7 @@ fs_status fs_select_by_fid(fs_selection *sel, uint16_t file_id)
         return FS_ERR_NOT_FOUND;
     }
 
-    const fs_status st = resolve(index, &d);
+    const fs_status st = resolve_selectable(index, &d);
     if (st != FS_OK) {
         return st;
     }
@@ -218,14 +289,14 @@ static fs_status select_child_typed(fs_selection *sel, uint16_t file_id,
     if (sel == NULL) {
         return FS_ERR_PARAM;
     }
-    uint16_t index = FS_INVALID_INDEX;
-    const fs_status find = fs_find_child(sel->cur_df, file_id, &index);
+    uint16_t        index = FS_INVALID_INDEX;
+    const fs_status find  = fs_find_child(sel->cur_df, file_id, &index);
     if (find != FS_OK) {
         return find;
     }
 
-    fs_descriptor d;
-    const fs_status st = resolve(index, &d);
+    fs_descriptor   d;
+    const fs_status st = resolve_selectable(index, &d);
     if (st != FS_OK) {
         return st;
     }
@@ -237,21 +308,17 @@ static fs_status select_child_typed(fs_selection *sel, uint16_t file_id,
 }
 
 fs_status fs_select_child_df(fs_selection *sel, uint16_t file_id)
-{
-    return select_child_typed(sel, file_id, true);
-}
+{ return select_child_typed(sel, file_id, true); }
 
 fs_status fs_select_child_ef(fs_selection *sel, uint16_t file_id)
-{
-    return select_child_typed(sel, file_id, false);
-}
+{ return select_child_typed(sel, file_id, false); }
 
 fs_status fs_select_parent(fs_selection *sel)
 {
     if (sel == NULL) {
         return FS_ERR_PARAM;
     }
-    fs_descriptor cur;
+    fs_descriptor   cur;
     const fs_status st = fs_store_read_desc(sel->cur_df, &cur);
     if (st != FS_OK) {
         return st;
@@ -262,8 +329,8 @@ fs_status fs_select_parent(fs_selection *sel)
         return FS_ERR_NOT_FOUND;
     }
 
-    fs_descriptor parent;
-    const fs_status pst = resolve(cur.parent, &parent);
+    fs_descriptor   parent;
+    const fs_status pst = resolve_selectable(cur.parent, &parent);
     if (pst != FS_OK) {
         return pst;
     }
@@ -317,8 +384,8 @@ fs_status fs_select_by_path(fs_selection *sel, const uint8_t *path,
         if (fs_find_child(scratch.cur_df, fid, &index) != FS_OK) {
             return FS_ERR_NOT_FOUND;
         }
-        fs_descriptor d;
-        const fs_status st = resolve(index, &d);
+        fs_descriptor   d;
+        const fs_status st = resolve_selectable(index, &d);
         if (st != FS_OK) {
             return st;
         }
@@ -345,10 +412,17 @@ fs_status fs_ef_read(uint16_t index, uint16_t offset, uint16_t len,
     }
     *out_read = 0u;
 
-    fs_descriptor d;
+    fs_descriptor   d;
     const fs_status st = resolve(index, &d);
     if (st != FS_OK) {
         return st;
+    }
+    /* A deactivated DF anywhere above this EF makes it unreachable. Checked
+     * here rather than at selection time, because selection is navigation and
+     * this is the operation that actually touches data. */
+    const fs_status ast = ancestors_usable(&d);
+    if (ast != FS_OK) {
+        return ast;
     }
     if (!fs_is_ef(&d)) {
         return FS_ERR_WRONG_TYPE;
@@ -386,10 +460,14 @@ fs_status fs_ef_write(uint16_t index, uint16_t offset, uint16_t len,
         return FS_OK;
     }
 
-    fs_descriptor d;
+    fs_descriptor   d;
     const fs_status st = resolve(index, &d);
     if (st != FS_OK) {
         return st;
+    }
+    const fs_status ast = ancestors_usable(&d);
+    if (ast != FS_OK) {
+        return ast;
     }
     if (!fs_is_ef(&d)) {
         return FS_ERR_WRONG_TYPE;
@@ -520,7 +598,7 @@ fs_status fs_personalise(void)
     mf.lifecycle = FS_LC_ACTIVATED;
     mf.parent    = FS_NO_PARENT;
     mf.sfi       = FS_NO_SFI;
-    st = fs_store_write_desc(0u, &mf);
+    st           = fs_store_write_desc(0u, &mf);
     if (st != FS_OK) {
         return st;
     }
@@ -536,9 +614,22 @@ fs_status fs_personalise(void)
         uint8_t      sfi;
     } const layout[] = {
         { 1u, 0x2F00u, FS_TYPE_EF_TRANSPARENT, 0u, 32u, 1u },
-        { 2u, 0x7F10u, FS_TYPE_DF,             0u,  0u, 0u },
+        { 2u, 0x7F10u, FS_TYPE_DF, 0u, 0u, 0u },
         { 3u, 0x6F01u, FS_TYPE_EF_TRANSPARENT, 2u, 64u, 1u },
         { 4u, 0x6F02u, FS_TYPE_EF_TRANSPARENT, 2u, 16u, 2u },
+        /* EF.ATR -- ISO/IEC 7816-4 reserves 2F01 under the MF for card
+         * capability information that does not fit in the ATR's historical
+         * bytes. Contents written below, after the loop, because unlike every
+         * other file here it is not born empty: an EF.ATR full of 0xFF would
+         * be worse than absent, since a reader would parse it as a malformed
+         * data object rather than concluding the card has nothing to say. */
+        /* No SFI. A short EF identifier is a scarce resource -- 1..30 across
+         * a DF -- and EF.ATR does not need one: a reader finds it by the
+         * well-known identifier 2F01, which is the entire point of ISO
+         * reserving that value. Spending an SFI here would take one from an
+         * application for no gain. */
+        { 5u, FS_EF_ATR_FID, FS_TYPE_EF_TRANSPARENT, 0u, FS_EF_ATR_SIZE,
+          FS_NO_SFI },
     };
 
     for (unsigned i = 0; i < (sizeof(layout) / sizeof(layout[0])); i++) {
@@ -553,7 +644,7 @@ fs_status fs_personalise(void)
 
         if (layout[i].type == FS_TYPE_EF_TRANSPARENT) {
             uint32_t offset = 0u;
-            st = fs_store_alloc_data(layout[i].size, &offset);
+            st              = fs_store_find_free_data(layout[i].size, &offset);
             if (st != FS_OK) {
                 return st;
             }
@@ -568,6 +659,71 @@ fs_status fs_personalise(void)
             return st;
         }
     }
+
+    /* ------------------------------------------------------------ EF.ATR -- */
+    /*
+     * WHAT THIS FILE IS FOR
+     *
+     * The ATR is clocked out before any command and cannot be changed at run
+     * time, so anything a reader needs to learn about the card that is not in
+     * the ATR has to live somewhere readable. ISO/IEC 7816-4 reserves EF.ATR
+     * (2F01) directly under the MF for exactly that, holding BER-TLV data
+     * objects.
+     *
+     * WHAT IS ASSERTED HERE, AND WHAT IS DELIBERATELY LEFT BLANK
+     *
+     * One data object: card capabilities, tag 47, three bytes.
+     *
+     *   byte 1  DF selection methods    LEFT 0x00
+     *   byte 2  data coding byte        LEFT 0x00
+     *   byte 3  command chaining, extended fields, logical channels
+     *
+     * Byte 3 is the one this milestone made true, and the only bit set is
+     * "extended Lc and Le fields supported". Command chaining is left clear
+     * because this card refuses it (apdu_check_cla returns 6884), and the
+     * logical-channel count is left at zero because only the basic channel
+     * exists.
+     *
+     * Bytes 1 and 2 are zero and that is a decision, not an oversight. Their
+     * bit assignments are not something this project has the specification
+     * text to state precisely, and EF.ATR is the one file whose entire purpose
+     * is to tell a reader the truth about the card -- guessing a bit layout
+     * here would be worse than saying nothing. A zero byte UNDER-claims: it
+     * reports no capability where the card does in fact support several
+     * selection methods. Under-claiming is the safe direction; a reader that
+     * finds no advertised capability falls back and works, whereas a reader
+     * that trusts an invented bit does something wrong and blames the card.
+     *
+     * See docs/roadmap.md for what completing this file needs.
+     *
+     * NOT ADVERTISED, and worth knowing: the extended-length bit is a boolean.
+     * It says the encoding is supported; it cannot say that this card's
+     * ceiling is SCOS_APDU_EXT_DATA_MAX rather than 65535. Publishing the real
+     * maximum belongs in the maximum-length data objects of EF.ATR/INFO, which
+     * are not emitted for the same reason bytes 1 and 2 are blank.
+     */
+    {
+        fs_descriptor   d;
+        const fs_status rst = fs_store_read_desc(5u, &d);
+        if (rst != FS_OK) {
+            return rst;
+        }
+
+        const uint8_t atr_content[FS_EF_ATR_SIZE] = {
+            0x47u, /* card capabilities                       */
+            0x03u, /* three bytes                             */
+            0x00u, /* DF selection methods -- not asserted    */
+            0x00u, /* data coding byte     -- not asserted    */
+            FS_CARD_CAP_EXTENDED_LENGTH,
+        };
+
+        st = fs_store_write_data(d.data_offset, sizeof(atr_content),
+                                 atr_content);
+        if (st != FS_OK) {
+            return st;
+        }
+    }
+
     return FS_OK;
 }
 
@@ -578,7 +734,7 @@ fs_status fs_init(void)
     if (st == FS_OK) {
         /* Mounted an existing image. Sanity-check that slot 0 really is the MF
          * before trusting the tree -- everything navigates from there. */
-        fs_descriptor mf;
+        fs_descriptor   mf;
         const fs_status rst = fs_store_read_desc(FS_ROOT_INDEX, &mf);
         if (rst != FS_OK) {
             return (rst == FS_ERR_NOT_FOUND) ? FS_ERR_CORRUPT : rst;
@@ -615,9 +771,7 @@ fs_status fs_init(void)
  * unambiguously selected.
  */
 static bool fid_is_reserved(uint16_t fid)
-{
-    return fid == FS_FID_MF || fid == 0xFFFFu;
-}
+{ return fid == FS_FID_MF || fid == 0xFFFFu; }
 
 fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
                          uint16_t *out_index)
@@ -710,13 +864,25 @@ fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
     d.parent    = sel->cur_df;
     d.size      = req->size;
     d.sfi       = req->sfi;
+    /*
+     * All THREE access conditions. ac_admin was missing here when it was first
+     * added to the descriptor, and the consequence is worth recording: reads
+     * and writes were protected correctly while admin protection was silently
+     * dropped, so a caller could ask for a delete-protected file, receive
+     * 9000, and get a file anyone could delete. Exactly the failure the "refuse
+     * what you do not understand" rule in cmd_create.c exists to prevent,
+     * reintroduced by adding a field without its copy.
+     *
+     * Caught by tests/python/test_access_conditions.py, not by review.
+     */
     d.ac_read   = req->ac_read;
     d.ac_update = req->ac_update;
+    d.ac_admin  = req->ac_admin;
     d.flags     = 0u;
 
     if (req->type == FS_TYPE_EF_TRANSPARENT) {
         uint32_t offset = 0u;
-        st = fs_store_alloc_data(req->size, &offset);
+        st              = fs_store_find_free_data(req->size, &offset);
         if (st != FS_OK) {
             /* Out of data space. The descriptor slot was never written, so
              * nothing needs undoing -- which is exactly why the allocation
@@ -791,4 +957,43 @@ fs_status fs_delete_file(fs_selection *sel, uint16_t file_id)
         sel->cur_ef = FS_INVALID_INDEX;
     }
     return FS_OK;
+}
+
+/* ------------------------------------------------------------- life cycle -- */
+
+fs_status fs_set_lifecycle(uint16_t index, fs_lifecycle want)
+{
+    if (want != FS_LC_ACTIVATED && want != FS_LC_DEACTIVATED) {
+        /* Defensive only: the command handler never passes anything else, so
+         * reaching this means an internal caller bug rather than a reader
+         * request. FS_ERR_PARAM says exactly that. */
+        return FS_ERR_PARAM;
+    }
+
+    fs_descriptor   d;
+    const fs_status st = fs_store_read_desc(index, &d);
+    if (st != FS_OK) {
+        return st;
+    }
+
+    if (d.lifecycle == FS_LC_TERMINATED) {
+        return FS_ERR_NOT_USABLE;
+    }
+    if (d.lifecycle != FS_LC_ACTIVATED && d.lifecycle != FS_LC_DEACTIVATED) {
+        /* CREATION or INITIALISED: personalisation is unfinished. */
+        return FS_ERR_NOT_USABLE;
+    }
+    if (want == FS_LC_DEACTIVATED && d.type == FS_TYPE_MF) {
+        /* Deactivating the root leaves nothing selectable and no route back. */
+        return FS_ERR_NOT_USABLE;
+    }
+
+    if (d.lifecycle == want) {
+        /* Idempotent by design: a reader whose response was lost must be able
+         * to repeat the command. No write, so no NVM wear either. */
+        return FS_OK;
+    }
+
+    d.lifecycle = want;
+    return fs_store_write_desc(index, &d);
 }

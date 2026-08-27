@@ -15,6 +15,50 @@ arm-none-eabi-gcc --version     # any recent version
 qemu-system-arm --version       # 6.0 or later
 ```
 
+## The short version
+
+```sh
+tools/card load        # blank chip -> running OS  (builds the firmware if needed)
+tools/card shell       # talk to it
+tools/card status      # what is in the OS slot
+tools/card recycle     # back to blank
+```
+
+That is the whole flow. `tools/card` is a facade over the tools the rest of
+this document uses directly -- `mkldr.py`, `load-os.sh`, `run-scv1.sh` -- and
+it exists because those three had three different argument shapes, and using a
+card meant remembering which took `--state-dir`, which took a positional,
+which needed `--boot`, and that piping APDUs into a UART hangs unless the input
+ends with `.quit`. Four things to remember to do one thing.
+
+Sending commands:
+
+```sh
+$ tools/card apdu 00A40000023F00 00C000000C
+> 00A40000023F00
+< 610C
+> 00C000000C
+< 6F0A82013883023F008A01059000
+```
+
+`card apdu` exits non-zero if any APDU did not answer `9000` or `61XX`, so it
+works in a shell script. It also checks each APDU's length field **before**
+sending and says which byte is wrong, because a hand-written `Lc` is wrong
+remarkably often and the card can only answer `6700`:
+
+```sh
+$ tools/card apdu 00D600000004AABBCCDD
+card: 00D600000004AABBCCDD: extended Lc=1194 (0x04AA) so the frame should be
+      1201 (Case 3E) or 1203 (Case 4E) bytes, but it is 10
+      looks like Lc was written as ONE byte; the extended form needs two
+```
+
+Cards live in `cards/<name>/` and persist between invocations, exactly as real
+silicon would. `tools/card list` shows them; the name defaults to `default`.
+
+**The rest of this document is the long version**, and it is worth reading
+once: `tools/card` hides the steps, and the steps are the interesting part.
+
 ## Step 0 — build
 
 Two programs come out of the ARM build, and they are genuinely separate:
@@ -124,7 +168,7 @@ SmartCard OS on SCV1 (ARM Cortex-M3)
 No loader script this time. The boot ROM found an ACTIVE slot, checked the CRC
 and the vector table, and jumped. The ATR is now `53 43 4F 53` — **SCOS**.
 
-## The easy way
+## The easy way, by hand
 
 Steps 1–3 by hand have one sharp edge, and it is worth knowing *why* before
 using the shortcut. `tools/load-os.sh` does the whole thing safely:

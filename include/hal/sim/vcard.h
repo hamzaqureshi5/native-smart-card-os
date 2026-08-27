@@ -8,7 +8,7 @@
  * headers.
  *
  * This is the layer that gets DELETED (not ported) when real hardware arrives:
- * src/hal/samsung/ will implement include/hal/hal.h directly against real
+ * src/hal/s3m228a/ will implement include/hal/hal.h directly against real
  * peripherals, and nothing here will be referenced.
  */
 #ifndef SCOS_VCARD_H
@@ -23,10 +23,7 @@
 /* Virtual power state. POWER_FAILURE (Milestone 4) will differ from POWER_OFF
  * by skipping the durability flush, so that an interrupted write stays
  * interrupted across a restart. */
-typedef enum {
-    VCARD_POWER_OFF = 0,
-    VCARD_POWER_ON
-} vcard_power;
+typedef enum { VCARD_POWER_OFF = 0, VCARD_POWER_ON } vcard_power;
 
 typedef struct {
     /* Directory holding card_eeprom.bin / card_flash.bin. If NULL, the virtual
@@ -52,8 +49,97 @@ void vcard_configure(const vcard_config *cfg);
 /* Defaults, for callers that want to override one field. */
 void vcard_config_default(vcard_config *cfg);
 
-hal_status vcard_power_on(void);   /* load NVM, init peripherals */
-void       vcard_power_off(void);  /* flush NVM durably          */
+hal_status vcard_power_on(void);  /* load NVM, init peripherals */
+void       vcard_power_off(void); /* flush NVM durably          */
+
+/*
+ * POWER FAILURE, as distinct from power off.
+ *
+ * vcard_power_off() is the reader pulling the card out cleanly: the NVM is
+ * flushed durably first, because a real chip's writes have already completed.
+ * That models an orderly end of session and it CANNOT test tear resistance --
+ * every write the OS thought it made is present.
+ *
+ * vcard_power_failure() models the card leaving the field mid-operation: the
+ * durability flush is SKIPPED, so anything the OS wrote without a following
+ * hal_nvm_sync() is lost. A card that appeared to survive power_off and
+ * corrupts under power_failure is the normal outcome of getting transactions
+ * wrong, which is why both exist.
+ */
+void vcard_power_failure(void);
+
+/*
+ * Fault injection: make the NEXT hal_nvm_write() stop after `n` bytes and
+ * report that power was lost.
+ *
+ * This is the whole reason M4's claims are testable rather than asserted. A
+ * transaction that survives an interruption at byte 0 and at byte N tells you
+ * very little; one that survives interruption at EVERY byte offset of a
+ * multi-byte write is a different kind of statement, and reaching each of those
+ * instants needs the write itself to stop there on command.
+ *
+ * `n` counts bytes actually stored before the abort, so 0 means "fail before
+ * writing anything" and a value >= the write length means "do not fail".
+ * Cleared automatically once it has fired, so a test arms it per write rather
+ * than remembering to disarm.
+ *
+ * SIMULATOR ONLY, and deliberately not in include/hal/hal.h: the OS must have
+ * no way to ask whether it is being fault-injected, or a future version of it
+ * could behave differently under test than in the field.
+ */
+/*
+ * Arm a cut at a SPECIFIC write, not merely at a byte offset.
+ *
+ * `skip` writes complete normally, then the next one stores `after` bytes and
+ * reports HAL_ERR_POWER.
+ *
+ * The `skip` parameter is not a convenience. Without it every arming lands on
+ * the FIRST hal_nvm_write() a command performs -- which, since M4 wrapped every
+ * command in a transaction, is the journal's own header write. So
+ * scos_txn_begin() failed, the command aborted before touching any data, and a
+ * test asserting "the data is unchanged" passed without the data write ever
+ * having been attempted.
+ *
+ * That is exactly what happened here: the first version of the interruption
+ * tests swept byte offsets only, reported success at every one, and was
+ * measuring nothing. It was caught by disabling recovery entirely and finding
+ * the tests still passed.
+ *
+ * So a real sweep is two-dimensional: for each write in the command, for each
+ * byte offset within it.
+ */
+void vcard_fault_at_write(uint32_t skip, uint32_t after);
+
+/*
+ * Keep failing every write from the target onward, instead of just one.
+ *
+ * This is what makes BOOT recovery reachable from a full-stack test. A
+ * single-shot fault is always followed, in the same session, by
+ * scos_txn_abort() rolling the transaction back -- because the simulator cannot
+ * stop the process half way through a C function the way a real card stops when
+ * the field drops. So a single-shot fault exercises the in-session rollback
+ * path and never leaves a journal OPEN for the next boot to find.
+ *
+ * With hold set, the abort's own writes fail too, the journal stays OPEN, and
+ * the next power-on is the thing that has to put the card right. That is the
+ * path a real tear takes and the one that was untested.
+ */
+void vcard_fault_hold(bool hold);
+
+/* Shorthand for vcard_fault_at_write(0, n) -- cut the very next write. */
+void vcard_fault_after_bytes(uint32_t n);
+void vcard_fault_clear(void);
+
+/* True if a fault fired since the last clear. Lets a test assert that the
+ * interruption it asked for actually happened, rather than passing because
+ * nothing went wrong for a different reason. */
+bool vcard_fault_fired(void);
+
+/* Internal, for hal_sim_nvm.c. Consumes the arming: returns true once and
+ * disarms, so an arming aimed at one write cannot silently apply to the next
+ * and make the test that armed it pass for the wrong reason. */
+bool        vcard_fault_pending(uint32_t *out_after);
+void        vcard_fault_mark_fired(void);
 vcard_power vcard_power_get(void);
 
 /* Print the startup banner (RAM/ROM/EEPROM/FLASH/ATR) to stderr. On stderr,

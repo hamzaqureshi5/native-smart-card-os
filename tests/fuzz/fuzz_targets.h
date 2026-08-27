@@ -35,6 +35,32 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/*
+ * FUZZ_CHECK -- an invariant that holds in EVERY build.
+ *
+ * Deliberately not assert(). Release defines NDEBUG, which compiles assert()
+ * to nothing, so a fuzz target written with assert() still runs at -O2 and
+ * still reports success while checking absolutely nothing. That is worse than
+ * not running it: it is a green result that means nothing.
+ *
+ * It was not a hypothetical. Before tools/build.sh existed, no build used
+ * -O2, so the Release configuration had never been compiled -- and when it
+ * finally was, the only symptom was four unused-variable errors from
+ * variables that existed solely to feed an assert. The errors were the lucky
+ * part; without -Werror the build would have succeeded and the invariants
+ * would have silently vanished.
+ */
+#define FUZZ_CHECK(cond)                                                       \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            (void)fprintf(stderr, "FUZZ_CHECK failed: %s\n  at %s:%d in %s\n", \
+                          #cond, __FILE__, __LINE__, __func__);                \
+            abort();                                                           \
+        }                                                                      \
+    } while (0)
 
 /* Command APDU parser: the primary attack surface. */
 int scos_fuzz_apdu(const uint8_t *data, size_t size);

@@ -167,13 +167,20 @@ class CreateFileTests(unittest.TestCase):
             self.assertEqual(self.create(card, ef_template(0x2804, 8, 1)).sw,
                              SW_FILE_ALREADY_EXISTS)
 
-    def test_unknown_tags_are_refused_not_ignored(self):
-        """Tag 8C carries access conditions.
+    def test_the_iso_compact_security_format_is_refused(self):
+        """Tag 8C carries access conditions in ISO's compact format.
 
-        A card that ignored what it did not understand would accept "create
-        this file, PIN-protected" and create an unprotected file while
-        answering 9000, with the client none the wiser. Access conditions
-        arrive in M3; until then the only honest answer is a refusal.
+        Now 6A81 rather than 6A80, and the change is the point rather than a
+        relaxation: 8C is a valid tag, so "bad data field" was never true.
+        6A81 says the card understands the tag and does not implement it, which
+        tells a caller to use tag 86 instead of hunting for an error in a
+        template that has none.
+
+        Still refused. 8C's access-mode byte assigns bits to operations, this
+        project does not have the specification text to state those positions
+        precisely, and a card that accepted the template while misreading them
+        would create a file whose protection is not the protection that was
+        requested -- and answer 9000 while doing it.
         """
         with SmartCard() as card:
             self.assertEqual(self.select(card, 0x00, 0x3F00).sw, SW_OK)
@@ -183,10 +190,26 @@ class CreateFileTests(unittest.TestCase):
                 tlv(0x80, (16).to_bytes(2, "big")),
                 tlv(0x8C, bytes.fromhex("01FF")),
             )
-            self.assertEqual(self.create(card, template).sw, SW_WRONG_DATA)
+            self.assertEqual(self.create(card, template).sw,
+                             SW_FUNC_NOT_SUPPORTED)
             # Nothing was created, so the client cannot end up holding an
             # unprotected file it believes is protected.
             self.assertEqual(self.select(card, 0x02, 0x2805).sw, SW_FILE_NOT_FOUND)
+
+    def test_a_genuinely_unknown_tag_is_still_6a80(self):
+        """The other half: a tag the card has no opinion about at all. 6A80,
+        because that IS a bad data field -- and it must stay distinguishable
+        from 6A81, which means "valid, unimplemented"."""
+        with SmartCard() as card:
+            self.assertEqual(self.select(card, 0x00, 0x3F00).sw, SW_OK)
+            template = fcp(
+                tlv(0x82, bytes([FDB_EF_TRANSPARENT])),
+                tlv(0x83, (0x2807).to_bytes(2, "big")),
+                tlv(0x80, (16).to_bytes(2, "big")),
+                tlv(0x9E, bytes.fromhex("AA")),   # not an FCP tag at all
+            )
+            self.assertEqual(self.create(card, template).sw, SW_WRONG_DATA)
+            self.assertEqual(self.select(card, 0x02, 0x2807).sw, SW_FILE_NOT_FOUND)
 
     def test_unsupported_iso_file_types_are_distinguishable(self):
         """6A81, not 6A80: the template is fine, the card lacks the feature."""

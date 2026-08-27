@@ -19,3 +19,15 @@ mycard/
 card_bootsel.bin
 card_osflash.bin
 card_oshdr.bin
+
+# Logs from tools/build.sh
+build-logs/
+
+# Logs from tools/build.sh
+build.log
+build-arm.log
+build-rel.log
+
+# Cards created by tools/card
+cards/
+build-arm.card.log

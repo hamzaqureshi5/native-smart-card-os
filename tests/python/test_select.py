@@ -52,15 +52,29 @@ class TestSelectMasterFile(CardTestCase):
     """The milestone target."""
 
     def test_the_first_apdu(self):
-        # This is the exact command from the specification.
+        # The exact command from the specification, and it is a Case 3 SELECT
+        # with P2=00 -- so it asks for the file's control information while
+        # giving the card no Le to return it in. The correct ISO answer is
+        # 61XX: "I have XX bytes, come and get them with GET RESPONSE."
+        #
+        # Until M2b this returned 9000 with no data, which was well-formed and
+        # silently useless. Kept as an explicit assertion here because this
+        # APDU is the project's canonical first command.
         response = self.card.send_apdu("00A40000023F00")
-        self.assertSW(response, SW_OK)
-        self.assertEqual(response.data, b"")
-        self.assertTrue(response.ok)
+        self.assertEqual(response.sw1, 0x61, f"got {response.sw:04X}")
+        self.assertEqual(response.data, b"", "61XX carries no data of its own")
+
+        # And the selection really moved -- 61XX is a success status. A card
+        # that staged the FCI without committing would answer this correctly
+        # and then read the wrong file.
+        fetched = self.card.send_apdu(f"00C00000{response.sw2:02X}")
+        self.assertSW(fetched, SW_OK)
+        self.assertEqual(fetched.data[0], 0x6F, "FCI template")
 
     def test_spaces_in_hex_are_accepted(self):
-        # A human types it with spaces; the transport must not care.
-        self.assertSW(self.card.send_apdu("00 A4 00 00 02 3F 00"), SW_OK)
+        # A human types it with spaces; the transport must not care. P2=0C so
+        # this is about the transport, not about 61XX.
+        self.assertSW(self.card.send_apdu("00 A4 00 0C 02 3F 00"), SW_OK)
 
     def test_select_helper(self):
         self.assertSW(self.card.select(0x3F00), SW_OK)
@@ -70,14 +84,19 @@ class TestSelectMasterFile(CardTestCase):
             self.assertSW(self.card.select(0x3F00), SW_OK)
 
     def test_select_mf_without_data_field(self):
-        # Case 1 and Case 2 forms of "select the MF".
-        self.assertSW(self.card.send_apdu("00A40000"), SW_OK)
+        # ISO permits an absent data field with P1=00, meaning "select the MF".
+        # Case 1 (header only) has no Le, so with P2=00 it announces 61XX;
+        # Case 2 supplies Le=00 (256) and gets the template directly.
+        self.assertEqual(self.card.send_apdu("00A40000").sw1, 0x61)
         self.assertSW(self.card.send_apdu("00A4000000"), SW_OK)
+        # With P2=0C the card is not asked for control information at all.
+        self.assertSW(self.card.send_apdu("00A4000C"), SW_OK)
 
 
 class TestSelectErrors(CardTestCase):
     def test_unknown_file(self):
-        self.assertSW(self.card.select(0x2F01), SW_FILE_NOT_FOUND)
+        # 2F02, not 2F01: 2F01 is EF.ATR and the card really has it now.
+        self.assertSW(self.card.select(0x2F02), SW_FILE_NOT_FOUND)
 
     def test_select_by_df_name_not_supported(self):
         # P1=04 selects by AID. AIDs belong to the Card Manager (M7), so there
@@ -118,8 +137,11 @@ class TestProtocolErrors(CardTestCase):
         # deliberate edit here rather than a loosened assertion:
         #   B0 / D6  -> M2a  (test_filesystem.py)
         #   E0 / E4  -> M2b  (test_create.py)
-        # Still absent: VERIFY (M3), GET DATA, GET RESPONSE (M2b, open).
-        for ins in ("20", "CA", "C0"):
+        #   C0       -> M2b  (test_get_response.py)
+        #   44 / 04  -> M2b  (test_lifecycle.py)
+        #   20       -> M3   (test_pin.py)
+        # Still absent: GET DATA.
+        for ins in ("CA",):
             self.assertSW(
                 self.card.send_apdu(f"00{ins}0000"),
                 SW_INS_NOT_SUPPORTED,
@@ -134,7 +156,7 @@ class TestProtocolErrors(CardTestCase):
         it only checks what is absent. These get a real error for the empty
         APDU (6700 or 6986), never 6D00.
         """
-        for ins in ("A4", "B0", "D6", "E0", "E4"):
+        for ins in ("A4", "B0", "D6", "E0", "E4", "C0"):
             sw = self.card.send_apdu(f"00{ins}0000").sw
             self.assertNotEqual(sw, SW_INS_NOT_SUPPORTED, f"INS {ins}")
 
@@ -155,12 +177,48 @@ class TestProtocolErrors(CardTestCase):
     def test_lc_longer_than_data(self):
         self.assertSW(self.card.send_apdu("00A40000FF3F00"), SW_WRONG_LENGTH)
 
-    def test_extended_apdu_refused_not_misparsed(self):
-        # 00 A4 00 00 | 00 00 02 | 3F 00  -- extended Lc encoding.
-        self.assertSW(
-            self.card.send_apdu("00A4000000000 23F00".replace(" ", "")),
-            SW_FUNC_NOT_SUPPORTED,
-        )
+    def test_extended_apdu_selects_the_mf(self):
+        # 00 A4 00 00 | 00 00 02 | 3F 00 -- a Case 3E SELECT of the MF.
+        # The same command the card is most often asked, in the extended
+        # encoding. Answers 610C: selection succeeded and 12 bytes of FCI are
+        # waiting, exactly as the short form does.
+        r = self.card.send_apdu("00A40000000002" + "3F00")
+        self.assertEqual(r.sw1, 0x61, f"expected 61XX, got {r.sw:04X}")
+        # And the FCI is collectable, which proves the extended frame did not
+        # merely parse but dispatched into a real handler.
+        fci = self.card.send_apdu(f"00C00000{r.sw2:02X}")
+        self.assertSW(fci, SW_OK)
+        self.assertEqual(len(fci.data), r.sw2)
+
+    def test_extended_five_byte_boundary_is_short_le(self):
+        # 00 A4 00 00 00 is FIVE bytes with a zero fifth byte. It is a short
+        # Case 2 with Le=256, NOT the start of an extended APDU -- the
+        # extended form needs three bytes of length field and there is one.
+        # Misreading it would break the project's canonical first APDU.
+        #
+        # The discriminating outcome is 9000 WITH data: Le is present, so the
+        # card returns the FCI in this same exchange and never needs a 61XX.
+        # Had the frame been taken for the start of an extended APDU it would
+        # have been 6700, and had the fifth byte been read as Lc it would have
+        # been 6700 as well -- so success with a non-empty body is the only
+        # answer consistent with a correct parse.
+        r = self.card.send_apdu("00A4000000")
+        self.assertSW(r, SW_OK)
+        self.assertGreater(len(r.data), 0, "Le was present; FCI expected")
+
+    def test_extended_six_bytes_is_wrong_length(self):
+        # A zero introducer with only two bytes after it. No legal APDU has
+        # this shape: 6700, and specifically not 6A81, because extended length
+        # IS supported -- telling a reader otherwise would make it abandon the
+        # encoding instead of fixing the frame.
+        self.assertSW(self.card.send_apdu("00A400000001"), SW_WRONG_LENGTH)
+
+    def test_extended_lc_above_ceiling_is_wrong_length(self):
+        # A well-formed extended header announcing 4096 data bytes, which is
+        # above the card's documented ceiling. The card must answer rather
+        # than hang or drop the frame.
+        apdu = "00D60000" + "00" + "1000" + ("AA" * 16)
+        self.assertSW(self.card.send_apdu(apdu), SW_WRONG_LENGTH)
 
     def test_maximum_length_apdu(self):
         # Lc=255 plus Le: 261 bytes, the largest short APDU. Must be handled,
@@ -235,12 +293,12 @@ class TestTransport(CardTestCase):
         # status word: on real hardware the link layer would reject it.
         # So the card stays silent, and the next real APDU still works.
         self.card._write("not-hex-at-all")
-        self.card._write("00A40000023F00")
+        self.card._write("00A4000C023F00")   # P2=0C: plain 9000, no 61XX
         self.assertEqual(self.card._read(), "9000")
 
     def test_odd_number_of_hex_digits_rejected(self):
         self.card._write("00A4000")
-        self.card._write("00A40000023F00")
+        self.card._write("00A4000C023F00")
         self.assertEqual(self.card._read(), "9000")
 
     def test_comments_and_blank_lines_ignored(self):
@@ -259,7 +317,7 @@ class TestTransport(CardTestCase):
         # Every line the client reads must be pure hex. If the banner or a
         # diagnostic leaked onto stdout, this fails.
         for _ in range(5):
-            line = self.card.send_raw("00A40000023F00")
+            line = self.card.send_raw("00A4000C023F00")
             int(line, 16)  # raises if not hex
             self.assertEqual(line, "9000")
 

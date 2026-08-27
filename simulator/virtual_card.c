@@ -27,12 +27,12 @@
 #include <string.h>
 
 #if defined(_WIN32)
-#  include <direct.h>
-#  define VCARD_MKDIR(p) _mkdir(p)
+#include <direct.h>
+#define VCARD_MKDIR(p) _mkdir(p)
 #else
-#  include <sys/stat.h>
-#  include <sys/types.h>
-#  define VCARD_MKDIR(p) mkdir((p), 0700)
+#include <sys/stat.h>
+#include <sys/types.h>
+#define VCARD_MKDIR(p) mkdir((p), 0700)
 #endif
 
 /* --- virtual memory ------------------------------------------------------ */
@@ -139,8 +139,8 @@ static void path_join(char *out, size_t cap, const char *dir, const char *name)
     (void)snprintf(out, cap, "%s/%s", dir, name);
 }
 
-static void region_load(const char *dir, const char *name,
-                        uint8_t *buf, uint32_t size)
+static void region_load(const char *dir, const char *name, uint8_t *buf,
+                        uint32_t size)
 {
     char path[512];
     path_join(path, sizeof(path), dir, name);
@@ -162,8 +162,8 @@ static void region_load(const char *dir, const char *name,
     }
 }
 
-static void region_store(const char *dir, const char *name,
-                         const uint8_t *buf, uint32_t size)
+static void region_store(const char *dir, const char *name, const uint8_t *buf,
+                         uint32_t size)
 {
     char path[512];
     path_join(path, sizeof(path), dir, name);
@@ -187,10 +187,10 @@ hal_status vcard_power_on(void)
     if (c->state_dir != NULL) {
         (void)VCARD_MKDIR(c->state_dir); /* may already exist; that is fine */
         region_load(c->state_dir, "card_eeprom.bin", s_eeprom, c->eeprom_size);
-        region_load(c->state_dir, "card_flash.bin",  s_flash,  c->flash_size);
+        region_load(c->state_dir, "card_flash.bin", s_flash, c->flash_size);
     } else {
         memset(s_eeprom, 0xFF, c->eeprom_size);
-        memset(s_flash,  0xFF, c->flash_size);
+        memset(s_flash, 0xFF, c->flash_size);
     }
 
     /* RAM is deliberately NOT restored. That is the whole point of RAM: a
@@ -208,12 +208,142 @@ void vcard_power_off(void)
     const vcard_config *c = cfg();
     if (s_power == VCARD_POWER_ON && c->state_dir != NULL) {
         region_store(c->state_dir, "card_eeprom.bin", s_eeprom, c->eeprom_size);
-        region_store(c->state_dir, "card_flash.bin",  s_flash,  c->flash_size);
+        region_store(c->state_dir, "card_flash.bin", s_flash, c->flash_size);
     }
     s_power = VCARD_POWER_OFF;
 }
 
-vcard_power vcard_power_get(void) { return s_power; }
+void vcard_power_failure(void)
+{
+    /*
+     * The card leaving the field mid-operation.
+     *
+     * IT FLUSHES, AND THE INTUITION THAT IT SHOULD NOT IS WRONG.
+     *
+     * The first version of this skipped the flush, reasoning that a power cut
+     * should lose whatever had not been made durable. That models RAM, not
+     * NVM. On a real chip the array IS the storage: there is no flush, and a
+     * page program is durable the instant it completes. The
+     * flush-to-state-directory here is an artefact of simulating a chip with a
+     * file, not a model of anything the hardware does.
+     *
+     * Skipping it therefore modelled something no card does -- losing an entire
+     * session's completed writes -- and it made the cross-session tear test
+     * worthless in the most misleading way available: the card came back with
+     * the right data because the whole session had been discarded, so recovery
+     * never ran. A green test that exercised nothing.
+     *
+     * So the array is persisted exactly as it stands, INCLUDING the partial
+     * bytes of an interrupted write and whatever state the journal had reached.
+     * That is what a real tear leaves behind, and it is the state recovery has
+     * to cope with.
+     *
+     * What then distinguishes this from vcard_power_off()? Not the persistence
+     * -- both persist. The difference is WHEN it happens: power_off is called
+     * between commands, so no write is in flight, while this is called with a
+     * write cut in half by vcard_fault_after_bytes(). The partiality comes from
+     * the fault hook; this function's job is only to make it survive.
+     */
+    const vcard_config *c = cfg();
+    if (s_power == VCARD_POWER_ON && c->state_dir != NULL) {
+        region_store(c->state_dir, "card_eeprom.bin", s_eeprom, c->eeprom_size);
+        region_store(c->state_dir, "card_flash.bin", s_flash, c->flash_size);
+    }
+    s_power = VCARD_POWER_OFF;
+}
+
+/* --------------------------------------------------- fault injection ----- */
+/*
+ * One-shot, and one-shot on purpose: a test arms the write it wants to
+ * interrupt, rather than arming and disarming around it. The second pattern is
+ * the one that leaves a fault armed for the next test and produces a failure
+ * three tests later with no obvious cause.
+ */
+static bool     s_fault_armed = false;
+static uint32_t s_fault_skip  = 0u; /* writes to let through first  */
+static uint32_t s_fault_after = 0u; /* bytes to store, then abort   */
+static bool     s_fault_fired = false;
+static bool     s_fault_hold  = false;
+
+void vcard_fault_at_write(uint32_t skip, uint32_t after)
+{
+    s_fault_armed = true;
+    s_fault_skip  = skip;
+    s_fault_after = after;
+    s_fault_fired = false;
+}
+
+void vcard_fault_hold(bool hold)
+{ s_fault_hold = hold; }
+
+void vcard_fault_after_bytes(uint32_t n)
+{ vcard_fault_at_write(0u, n); }
+
+void vcard_fault_clear(void)
+{
+    s_fault_armed = false;
+    s_fault_skip  = 0u;
+    s_fault_after = 0u;
+    s_fault_fired = false;
+    s_fault_hold  = false;
+}
+
+bool vcard_fault_fired(void)
+{ return s_fault_fired; }
+
+bool vcard_fault_pending(uint32_t *out_after)
+{
+    if (!s_fault_armed) {
+        return false;
+    }
+    if (s_fault_skip > 0u) {
+        /*
+         * Let this write through and count it. The arming STAYS armed -- that
+         * is the whole difference from the previous version, which disarmed on
+         * the first write it saw and therefore could only ever interrupt a
+         * command's first NVM access. Since every command now begins by
+         * writing the journal header, that meant the data write was never
+         * reached.
+         */
+        s_fault_skip--;
+        return false;
+    }
+    if (out_after != NULL) {
+        /*
+         * The FIRST cut stores s_fault_after bytes -- a half-programmed page.
+         * Every write after it, while hold is set, stores NOTHING.
+         *
+         * That is the faithful model and the first version got it wrong. Power
+         * is gone; the array is not being written any more. Letting held writes
+         * keep storing s_fault_after bytes each produced a specific and very
+         * misleading result: a data write cut after 2 bytes, followed by a
+         * rollback write also cut after 2 bytes, restored exactly the 2 bytes
+         * that had changed. The card came back correct, the test passed, and
+         * boot recovery had done nothing -- which only came to light when
+         * disabling recovery altogether changed no outcome.
+         */
+        *out_after = s_fault_fired ? 0u : s_fault_after;
+    }
+    /*
+     * Reached the target write. Disarm, so one arming cuts exactly one write --
+     * unless hold is set, in which case every subsequent write fails too.
+     *
+     * Hold is what leaves a journal OPEN across a power cycle: without it, the
+     * abort that follows a failed command succeeds, rolls the transaction back
+     * in the same session, and the next boot has nothing to recover. That is
+     * the in-session path, not the tear path.
+     */
+    if (!s_fault_hold) {
+        s_fault_armed = false;
+    }
+    return true;
+}
+
+void vcard_fault_mark_fired(void)
+{ s_fault_fired = true; }
+
+vcard_power vcard_power_get(void)
+{ return s_power; }
 
 /* --------------------------------------------------------------- NVM ----- */
 
@@ -222,13 +352,19 @@ uint8_t *vcard_nvm_base(hal_nvm_region region, uint32_t *out_size)
     const vcard_config *c = cfg();
     switch (region) {
     case HAL_NVM_EEPROM:
-        if (out_size != NULL) { *out_size = c->eeprom_size; }
+        if (out_size != NULL) {
+            *out_size = c->eeprom_size;
+        }
         return s_eeprom;
     case HAL_NVM_FLASH:
-        if (out_size != NULL) { *out_size = c->flash_size; }
+        if (out_size != NULL) {
+            *out_size = c->flash_size;
+        }
         return s_flash;
     default:
-        if (out_size != NULL) { *out_size = 0u; }
+        if (out_size != NULL) {
+            *out_size = 0u;
+        }
         return NULL;
     }
 }
@@ -236,9 +372,12 @@ uint8_t *vcard_nvm_base(hal_nvm_region region, uint32_t *out_size)
 uint32_t vcard_nvm_page(hal_nvm_region region)
 {
     switch (region) {
-    case HAL_NVM_EEPROM: return VCARD_EEPROM_PAGE;
-    case HAL_NVM_FLASH:  return VCARD_FLASH_PAGE;
-    default:             return 0u;
+    case HAL_NVM_EEPROM:
+        return VCARD_EEPROM_PAGE;
+    case HAL_NVM_FLASH:
+        return VCARD_FLASH_PAGE;
+    default:
+        return 0u;
     }
 }
 
@@ -280,11 +419,10 @@ void vcard_print_banner(void)
                   "ROM:     %u KB   (budget; checked against the build)\n"
                   "EEPROM:  %u KB   page %u B\n"
                   "FLASH:   %u KB   page %u B\n",
-                  SCOS_VERSION_STRING,
-                  (unsigned)SCOS_RAM_KB,
-                  (unsigned)SCOS_ROM_KB,
-                  (unsigned)(c->eeprom_size / 1024u), VCARD_EEPROM_PAGE,
-                  (unsigned)(c->flash_size / 1024u),  VCARD_FLASH_PAGE);
+                  SCOS_VERSION_STRING, (unsigned)SCOS_RAM_KB,
+                  (unsigned)SCOS_ROM_KB, (unsigned)(c->eeprom_size / 1024u),
+                  VCARD_EEPROM_PAGE, (unsigned)(c->flash_size / 1024u),
+                  VCARD_FLASH_PAGE);
 
     (void)fprintf(stderr, "State:   %s\n",
                   (c->state_dir != NULL) ? c->state_dir

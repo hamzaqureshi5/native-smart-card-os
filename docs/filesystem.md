@@ -12,12 +12,20 @@ to list a directory.
 ```
 MF 3F00                    Master File -- the root. Exactly one.
  +-- EF 2F00               Elementary File: actual data. 32 bytes, SFI 1
+ +-- EF 2F01               EF.ATR: what the card can do. 5 bytes, no SFI
  +-- DF 7F10               Dedicated File: a container ("an application")
       +-- EF 6F01          64 bytes, SFI 1
       +-- EF 6F02          16 bytes, SFI 2
 ```
 
 That is the factory layout this card ships with, from `fs_personalise()`.
+
+`2F01` is the only one of those whose *contents* mean something to a reader:
+ISO/IEC 7816-4 reserves that identifier under the MF for card capability
+information that does not fit in the ATR. Every other file here ships in the
+erased state (`0xFF`), which is what a real un-personalised EF reads as. See
+the EF.ATR entry in [roadmap.md](roadmap.md) for what it asserts and, more
+importantly, what it deliberately does not.
 
 The difference from a PC filesystem that matters most: **access control is per
 file and enforced by the card itself.** There is no privileged mode that
@@ -225,10 +233,29 @@ about recovery is justified. Ordering helps a little (`fs_store_format()` writes
 the superblock *last*, so an interrupted format leaves the card readable as
 unformatted), but that is a mitigation, not a guarantee. M4.
 
-**No space reclamation.** Allocation is a bump pointer with no free list. Space
-released by a deleted file is not reclaimed until a compaction pass exists — and
-compaction cannot be written safely before transactions, because a power loss
-mid-compaction without a journal would destroy the filesystem.
+**Space reclamation: FIXED in M4.** This used to read "allocation is a bump
+pointer with no free list; space released by a deleted file is not reclaimed
+until a compaction pass exists". The fix was not compaction.
+
+Allocation is now **first fit over the live descriptors**. A freed descriptor
+slot stops being in use, so its extent is reused by the next file that fits, and
+`fs_store_data_free()` goes back up on delete. No free list and no compaction
+pass, because the descriptors already record what is in use — and compaction
+would move live data, whose undo log for a large EF would not fit in the 2 KB
+journal anyway. Real card filesystems reuse extents rather than defragmenting,
+because moving data on flash costs erase cycles and time.
+
+It also removed a second source of truth: `data_top` could disagree with the
+descriptors, and did, after an interrupted `CREATE FILE`. Deriving the answer
+means there is nothing to disagree with — and `CREATE FILE` no longer writes the
+superblock at all, which is one fewer NVM write and one fewer journal entry per
+file.
+
+Two consequences worth knowing. `fs_store_data_free()` reports total unused
+bytes, **not** the largest contiguous run, so N free is not a promise of an
+N-byte extent. And the lookup is O(n²) reads in the worst case rather than O(1),
+deliberately: sorting the extents first would be faster and would cost ~200
+bytes of stack, which is the one kind of RAM this project does not account for.
 
 **No descriptor cache.** Every lookup re-reads NVM, so a search is O(32) reads.
 A cache would cost ~640 bytes of RAM and introduce a coherence problem: two

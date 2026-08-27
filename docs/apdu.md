@@ -70,14 +70,70 @@ this: callers see `le == 256` and never have to remember the rule.
     00 A4 00 00 00 00 02 3F 00
                  ^^^^^^^^ extended Lc: 00 followed by a 2-byte length
 
-We do not implement extended APDUs yet, so we **detect and refuse** them rather
-than misparse them as short. Silently treating an extended APDU as short would
-let a caller smuggle in a length that was never validated -- the shape of a real
-memory-corruption bug.
+A first length byte of zero, with more bytes after it, introduces a **16-bit
+big-endian** length field instead of an 8-bit one:
 
-The refusal is `6A81` ("function not supported"), not `6700` ("wrong length"):
-the length is perfectly well-formed, we simply do not implement the function.
-Saying `6700` would be a false statement about the caller's APDU.
+    Case 2E   CLA INS P1 P2 00 Le1 Le2                    7 bytes
+    Case 3E   CLA INS P1 P2 00 Lc1 Lc2 <data>             7 + Lc
+    Case 4E   CLA INS P1 P2 00 Lc1 Lc2 <data> Le1 Le2     9 + Lc
+
+There is no Case 1E: a header-only command is four bytes either way.
+
+This is Trap 1 one level up, and it is resolved the same way -- by **total
+length**, never by the byte value alone:
+
+| bytes | what it is |
+|---|---|
+| 5 | short Case 2, `Le`=256. **Not** extended: the extended form needs three bytes of length field and there is one. |
+| 6 | nothing legal. `00` introduces three bytes and two follow. `6700`. |
+| 7 | Case 2E. Bytes 5-6 are `Le`, whatever their value. |
+| >= 8 | bytes 5-6 are `Lc`, and exactly one of `7+Lc` or `9+Lc` can equal the total, so the case is determined. |
+
+The five-byte row is the one that bites. `00 A4 00 00 00` is this project's own
+canonical first APDU, and it is short Case 2 -- reading its zero as the start of
+an extended field would break the command the card is asked most.
+
+`Le` of `0x0000` extended means **65536**, mirroring Trap 2. This is why `le` is
+`uint32_t` while `lc` is `uint16_t`: 65536 is the one APDU length that does not
+fit in sixteen bits.
+
+### Trap 4: `Lc` and `Le` are not symmetric, and a card must not treat them so
+
+`Lc` **costs RAM.** The card has to hold the entire command data field before it
+can act on it, so this card imposes a documented ceiling --
+`SCOS_APDU_EXT_DATA_MAX`, 1 KB -- and answers `6700` above it.
+
+Specifically **not** `6A81` "function not supported": extended length *is*
+supported here, and a reader told otherwise would stop using the encoding
+entirely instead of simply sending a smaller `Lc`. The status word has to name
+the fixable thing.
+
+`Le` **costs nothing.** ISO defines it as the *maximum* number of bytes
+expected, so a card may return fewer. An extended `Le` of 65536 is therefore
+honoured exactly as sent -- the card answers with what it has. No ceiling, no
+refusal, no buffer.
+
+That asymmetry has one consequence a reader must handle. `READ BINARY` can now
+return fewer bytes than `Le` for two different reasons:
+
+| SW | meaning | what to do next |
+|---|---|---|
+| `6282` | the **file** ended | stop; nothing further exists |
+| `9000` | the **card** clamped | read again from `offset + received` |
+
+Collapsing these is wrong in both directions: `6282` after a clamp under-reports
+the file's length, and `9000` at real end-of-file sends a reader round a loop
+that never terminates.
+
+### Why not 65535?
+
+Because no amount of buffer configuration reaches it on real hardware. A
+shipping SIM part has 5 KB of RAM *shared with the stack*
+([hardware-port.md](hardware-port.md)); 65535 bytes is not a tight fit there,
+it is impossible. The mechanism that does reach the ISO maximum is **command
+chaining** -- CLA bit b5, which splits a large data field across several short
+APDUs and needs no large buffer at all. This card refuses chaining with `6884`
+today, which is at least the specific truth rather than a blanket `6E00`.
 
 ## Response APDU
 
@@ -106,12 +162,13 @@ Values from ISO/IEC 7816-4; see `include/apdu/sw.h` for the full table.
 | SW | Meaning | When this card sends it |
 |---|---|---|
 | 9000 | Success | SELECT of the MF |
-| 6700 | Wrong length | APDU shorter than 4 bytes; Lc disagrees with the bytes present |
+| 6700 | Wrong length | APDU shorter than 4 bytes; Lc disagrees with the bytes present; extended Lc above the card's ceiling; extended Le on GET RESPONSE |
+| 6282 | End of file before Le | READ BINARY: the **file** ended. Distinct from 9000 with a short body, which means the **card** clamped an extended Le |
 | 6881 | Logical channel not supported | CLA requests channel != 0 |
 | 6882 | Secure messaging not supported | CLA sets the SM bits |
 | 6884 | Chaining not supported | CLA sets the chaining bit |
 | 6985 | Conditions not satisfied | card is TERMINATED |
-| 6A81 | Function not supported | extended APDU; FCP/FMD templates |
+| 6A81 | Function not supported | SELECT by DF name; unsupported ISO file types |
 | 6A82 | File not found | SELECT of a file identifier we do not have |
 | 6A86 | Incorrect P1-P2 | unimplemented selection method; reserved P2 bits set |
 | 6A87 | Lc inconsistent with P1-P2 | SELECT with Lc that is neither 0 nor 2 |
@@ -138,3 +195,55 @@ From `src/apdu/apdu_parse.c`, applied without exception:
 and asserts the parser accepts exactly the two legal lengths and that the data
 field always lies inside the input. Run under ASan, that sweep is also an
 out-of-bounds hunt.
+
+## GET RESPONSE and 61XX
+
+`GET RESPONSE` is not a feature. It is a workaround for T=0, and knowing that
+is the difference between implementing it and cargo-culting it.
+
+T=0 is half-duplex and byte-oriented: the reader must state in advance how many
+bytes it will accept. So a **Case 3** command -- header plus data, no Le -- has
+no channel on which to return anything. If `SELECT` wants to hand back a file's
+control information and the reader never sent an Le, the bytes simply cannot go
+anywhere.
+
+ISO/IEC 7816-4's answer is a two-step:
+
+```
+-> 00 A4 00 00 02 3F 00          Case 3 SELECT, no Le
+<- 61 0C                         "I have 12 bytes for you"
+-> 00 C0 00 00 0C                GET RESPONSE, Le = 12
+<- 6F 0A 82 01 38 83 02 3F 00 8A 01 05   90 00
+```
+
+With an Le present the card just returns the data, and no `61XX` is involved:
+
+```
+-> 00 A4 00 00 02 3F 00 00       Case 4, Le = 0 meaning 256
+<- 6F 0A 82 01 38 ... 90 00
+```
+
+T=1 has no such limitation, which is why a T=1-only card can omit the command
+entirely.
+
+### The rules that matter
+
+| Situation | Answer | Why |
+|---|---|---|
+| Nothing pending | `6985` | The instruction *is* supported; the **sequence** is wrong. `6D00` would tell a reader to stop trying it for good. |
+| Any other command ran first | data discarded, then `6985` | ISO requires GET RESPONSE to immediately follow its `61XX`. A card that kept the data would let a later command collect an earlier one's output. |
+| A malformed frame arrived | data **kept** | It never reached a handler, so no command intervened. Dropping it would make GET RESPONSE unusable on a noisy link. |
+| Le smaller than pending | that many bytes + a fresh `61XX` | The reader may collect in chunks. |
+| Le larger than pending | `6CXX`, nothing consumed | Names the exact length so the retry succeeds first time. Returning fewer bytes with `9000` would silently change the length contract. |
+| Card reset | data discarded | A reset clears all volatile state. |
+
+### `61XX` is a success status
+
+Worth stating on its own, because getting it wrong is easy and the symptom is
+subtle. `61XX` means **the command executed** and its output is waiting.
+`6CXX` means the command did **not** execute. So a `SELECT` answering `61XX`
+must commit its selection, and one answering `6CXX` must not.
+
+Conflating the two was a real bug here: a Case 3 `SELECT` staged its FCI,
+returned `61XX`, and left the previous selection in place -- so the card
+described one file and would have read another.

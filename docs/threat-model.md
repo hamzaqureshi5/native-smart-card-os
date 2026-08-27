@@ -220,9 +220,19 @@ in the hands of the person attacking it.
 * **Component:** NVM, filesystem, transactions
 * **Attack:** Cut power during a write. Leave a file half-updated, a PIN counter
   un-decremented (infinite guesses), or filesystem metadata inconsistent.
-* **Mitigation:** **NOT YET IMPLEMENTED.** Milestone 4. Today
-  `hal_nvm_write()` is an atomic `memcpy` -- the *optimistic* case -- so
-  **nothing in this project may currently claim tear-resistance.**
+* **Mitigation:** **PARTIAL.** M4's undo journal is in place: every command
+  runs as a transaction, and recovery at boot rolls back anything that did not
+  commit. Interrupting `CREATE FILE` or `UPDATE BINARY` at any byte offset
+  leaves the card byte-identical across the whole EEPROM.
+
+  The PIN counter is deliberately **outside** the journal, so a failed
+  `VERIFY` still costs a try -- see T14. Had it been journaled at command
+  scope, the abort path would have handed the attempt back and undone M3.
+
+  **Not yet:** the interruption tests are host-only (fault injection is in the
+  simulator HAL), and the simulator's power-failure model is stricter than real
+  silicon. The claim is "resists power interruption at command granularity on
+  the host", not "tear-resistant".
   Groundwork in place: `hal_nvm_sync()` exists as an explicit durability
   barrier, so the OS is written against a device that buffers writes; and the
   EEPROM/FLASH split with distinct page sizes is modelled, because a retry
@@ -268,6 +278,125 @@ does not boot a partial image; the image CRC and vector table are re-checked on
 every reset, so a damaged image stays in the loader rather than faulting; and
 the loader refuses to program unerased flash, so it cannot be tricked into
 writing the AND of two images.
+
+## T16 -- Unauthorized file access
+
+**Attacker:** anyone who can reach the card with a reader.
+
+**Mitigated as of M3.** Every file carries three access-condition bytes
+(read / update / admin) and the five commands that touch files check them,
+answering `6982` when the session is not entitled. A condition of `0x1N`
+requires PIN reference N to have been verified **in this session**, and the
+authentication state is volatile -- so removing power revokes it.
+
+**Two residual holes, both real.**
+
+*A factory card has no protection on its root.* The MF ships with
+`ac_admin = ALWAYS`, because a card whose root cannot be written has no way to
+receive its first file. Anyone who reaches a card before it is personalised can
+create files in the MF, and can therefore create an unprotected file. Real
+cards close this by personalising before issuance behind a secure channel to a
+security domain -- M7. Until then, an unpersonalised card should be treated as
+untrusted.
+
+*Conditions are set at creation and cannot be changed afterwards.* There is no
+command to tighten or loosen an existing file's conditions, so a file created
+permissively stays permissive. That is safer than the alternative would have
+been -- a `CHANGE SECURITY ATTRIBUTES` command is itself an administrative
+operation needing its own gate, and getting that wrong would be a way to
+unlock every file on the card -- but it means the only route to a correctly
+protected file is to create it that way.
+
+**Not mitigated at all:** anything below the command interface. An attacker who
+can read or write EEPROM directly bypasses all of this, because the conditions
+are bytes in the same EEPROM. That is the chip's memory protection's job and
+this project models no chip.
+
+---
+
+## T13 -- PIN recovered from NVM
+
+**Attacker:** anyone who can read the card's EEPROM -- through a debug
+interface, a decapsulated die, or a simulator state directory.
+
+**Mitigated in part.** The PIN is never stored; EEPROM holds
+`SHA-256(salt || PIN)` and a 16-byte per-reference salt. A unit test scans the
+whole EEPROM for the PIN's own bytes and fails if it finds them.
+
+**What this does NOT do, stated plainly.** A 4-digit PIN behind a salted
+SHA-256 is ten thousand hashes to an attacker who can read NVM and compute,
+which is instant. The salt stops one precomputed table breaking a whole batch;
+it does not make a short PIN hard to recover. **The real protection is the
+retry counter plus the chip's memory protection, and this project models
+neither the chip nor its protection.**
+
+Read the verifier as making casual disclosure ineffective, not as making
+offline attack hard. An iterated KDF would raise the cost, and on a 14 MHz core
+that cost falls on the cardholder too; that trade needs a real part's timings
+before it can be made honestly.
+
+**Depends on hardware:** memory protection, and a real TRNG for the salt --
+the simulator's is a seeded PRNG, so cross-card salt uniqueness is a hardware
+requirement (see `docs/hardware-port.md`).
+
+---
+
+## T14 -- Retry counter reset by removing power
+
+**Attacker:** anyone holding the card and a reader they control.
+
+**The attack:** present a wrong PIN, and cut power before the card can record
+the failure. If the counter comes back, the retry limit is infinite and a
+4-digit PIN falls in ten thousand attempts. This is not hypothetical; it has
+been used against real products.
+
+**Mitigated.** Three things together, and all three are load-bearing:
+
+1. The counter is decremented and **synced to NVM before the PIN is compared**.
+   Every other order is broken -- compare-then-decrement hands the try back on
+   exactly this attack.
+2. It lives in **byte-writable EEPROM**, so consuming a try is one byte. On
+   page-erase flash the smallest write is a page, which would put the salt and
+   verifier at risk on every failed attempt.
+3. It is a **unary tally**: spending a try clears the lowest set bit, so the
+   write is atomic and can only ever *lose* tries. A glitched or partial write
+   fails in the safe direction.
+
+The cost is that a power cut during a *correct* attempt loses a try. That is
+the right direction to fail.
+
+**Residual risk.** The tally sits outside the record's CRC -- it has to, so it
+can change without rewriting its container. A fault that *sets* a bit therefore
+gains a try. Setting bits in EEPROM is a harder fault to induce than clearing
+them, but the honest statement is: the counter resists **power interruption**
+and says nothing about active fault injection.
+
+**Not yet proven.** A power cut in the middle of a verify, between the commit
+and the comparison, is untested -- it needs M4's fault-injection hook in
+`hal_nvm_write()`. Today's claim is "resists power interruption at command
+granularity", not "tear-resistant".
+
+---
+
+## T15 -- PIN replaced instead of guessed
+
+**Attacker:** anyone holding the card and a reader.
+
+**The attack:** ignore the PIN entirely. Use `CHANGE REFERENCE DATA` to set a
+PIN you know, then authenticate with it. Every counter, blocked state and
+constant-time comparison becomes decoration.
+
+**Mitigated.** Changing an ACTIVE reference requires that reference to have
+been verified in this session (`6982` otherwise), and a BLOCKED one cannot be
+changed at all (`6983`) -- otherwise exhausting the counter would be a route to
+a fresh PIN. Setting an UNSET reference is allowed, because that is initial
+personalisation and no credential exists yet to authorise it.
+
+**Residual risk.** A card that has never had a PIN set can have one set by
+anyone who reaches it first. Real cards close this by personalising before
+issuance, behind a secure channel to a security domain; that is M7.
+
+---
 
 ## T12 -- Boot loader bug bricks the part
 

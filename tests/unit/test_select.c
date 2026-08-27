@@ -45,9 +45,7 @@ static uint16_t current_df_fid(void)
 }
 
 static bool has_current_ef(void)
-{
-    return g_card.sel.cur_ef != FS_INVALID_INDEX;
-}
+{ return g_card.sel.cur_ef != FS_INVALID_INDEX; }
 
 /* Send an APDU, return the status word, and check the response shape. */
 static uint16_t send(const uint8_t *cmd, uint16_t len, uint16_t *out_data_len)
@@ -55,8 +53,8 @@ static uint16_t send(const uint8_t *cmd, uint16_t len, uint16_t *out_data_len)
     uint8_t  rsp[SCOS_APDU_RSP_MAX];
     uint16_t rsp_len = 0u;
 
-    const scos_status st = scos_process(&g_card, cmd, len,
-                                        rsp, (uint16_t)sizeof(rsp), &rsp_len);
+    const scos_status st =
+        scos_process(&g_card, cmd, len, rsp, (uint16_t)sizeof(rsp), &rsp_len);
     CHECK_EQ(st, SCOS_OK);
 
     /* THE core invariant: every response carries at least SW1 SW2. */
@@ -86,13 +84,18 @@ TEST(select_mf_the_first_test)
     /* 00 A4 00 00 02 3F 00
      * CLA=00 interindustry, INS=A4 SELECT, P1=00 by file identifier,
      * P2=00 first occurrence / return FCI, Lc=02, data=3F00 (the Master File).
-     * Expect 90 00. */
-    const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00 };
-    uint16_t data_len = 0xFFFFu;
-    CHECK_HEX(send(cmd, sizeof(cmd), &data_len), SW_OK);
-    /* Case 3 (no Le): the card cannot return data, so SW only. The FCI arrives
-     * when Le is present -- see select_returns_fci_when_le_present. */
-    CHECK_EQ(data_len, 0);
+     *
+     * Case 3: no Le, so under T=0 the card cannot return the FCI on this
+     * command at all. It answers 61XX -- "I have XX bytes" -- and the reader
+     * collects them with GET RESPONSE. Until M2b this returned 9000 with no
+     * data, which was well-formed and silently useless.
+     *
+     * 61XX is a SUCCESS status, so the selection must have moved. Asserting
+     * that here is what caught the bug where it had not. */
+    const uint8_t cmd[]    = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00 };
+    uint16_t      data_len = 0xFFFFu;
+    CHECK_HEX(send(cmd, sizeof(cmd), &data_len), SW_MORE_DATA(0x0C));
+    CHECK_EQ(data_len, 0); /* 61XX carries no data of its own */
     CHECK_HEX(selected_fid(), 0x3F00);
     CHECK(!has_current_ef());
 }
@@ -102,14 +105,15 @@ TEST(select_mf_with_absent_data_field)
     fresh();
     /* ISO permits an absent data field with P1=00, meaning "select the MF".
      * Case 1 (header only) and Case 2 (with Le) must both work. */
+    /* Case 1 has no Le either, so it too announces rather than returns. */
     const uint8_t case1[] = { 0x00, 0xA4, 0x00, 0x00 };
-    CHECK_HEX(send(case1, sizeof(case1), NULL), SW_OK);
+    CHECK_HEX(send(case1, sizeof(case1), NULL), SW_MORE_DATA(0x0C));
     CHECK_HEX(selected_fid(), 0x3F00);
 
     fresh();
     /* Case 2 asks for up to 256 bytes, so the FCI template comes back. */
-    const uint8_t case2[] = { 0x00, 0xA4, 0x00, 0x00, 0x00 };
-    uint16_t data_len = 0u;
+    const uint8_t case2[]  = { 0x00, 0xA4, 0x00, 0x00, 0x00 };
+    uint16_t      data_len = 0u;
     CHECK_HEX(send(case2, sizeof(case2), &data_len), SW_OK);
     CHECK(data_len > 0);
     CHECK_HEX(selected_fid(), 0x3F00);
@@ -119,8 +123,8 @@ TEST(select_p2_no_response_data_accepted)
 {
     fresh();
     /* P2 = 0C: "return no response data". */
-    const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x0C, 0x02, 0x3F, 0x00 };
-    uint16_t data_len = 0xFFFFu;
+    const uint8_t cmd[]    = { 0x00, 0xA4, 0x00, 0x0C, 0x02, 0x3F, 0x00 };
+    uint16_t      data_len = 0xFFFFu;
     CHECK_HEX(send(cmd, sizeof(cmd), &data_len), SW_OK);
     CHECK_EQ(data_len, 0);
 }
@@ -130,8 +134,10 @@ TEST(select_p2_no_response_data_accepted)
 TEST(select_unknown_file_is_6a82)
 {
     fresh();
-    /* 2F01 is not in the factory layout. */
-    const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x01 };
+    /* 2F02 is not in the factory layout. NOT 2F01: that is EF.ATR, which the
+     * card now really has -- this test used it as a stand-in for "absent" and
+     * started failing with 61XX the moment the file became real. */
+    const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x02 };
     CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_FILE_NOT_FOUND);
     /* The failure must not have moved the selection off the MF. */
     CHECK_HEX(current_df_fid(), 0x3F00);
@@ -146,7 +152,7 @@ TEST(failed_select_preserves_previous_selection)
      * failed lookup would let an attacker drop the security context with a
      * junk APDU. */
     const uint8_t good[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x00 };
-    CHECK_HEX(send(good, sizeof(good), NULL), SW_OK);
+    CHECK_HEX(send(good, sizeof(good), NULL), SW_MORE_DATA(0x13));
     CHECK_HEX(selected_fid(), 0x2F00);
     CHECK(has_current_ef());
 
@@ -221,10 +227,13 @@ TEST(not_yet_implemented_ins_is_6d00)
      *
      *   B0 / D6  -> M2a, covered by test_fs.c
      *   E0 / E4  -> M2b, covered by test_create.c
+     *   C0       -> M2b, covered by test_get_response.c
+     *   44 / 04  -> M2b, covered by test_lifecycle.c
+     *   20 / 24 / 2C -> M3, covered by test_pin.c
      *
-     * Still absent: VERIFY (M3), GET DATA, and GET RESPONSE (M2b, open).
+     * Still absent: GET DATA.
      */
-    const uint8_t ins[] = { 0x20, 0xCA, 0xC0 };
+    const uint8_t ins[] = { 0xCA };
     for (unsigned i = 0; i < sizeof(ins); i++) {
         const uint8_t cmd[] = { 0x00, ins[i], 0x00, 0x00 };
         CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_INS_NOT_SUPPORTED);
@@ -239,13 +248,15 @@ TEST(implemented_ins_is_never_6d00)
      * answers 6D00, and a list of what is ABSENT cannot detect that.
      */
     fresh();
-    const uint8_t ins[] = { 0xA4, 0xB0, 0xD6, 0xE0, 0xE4 };
+    const uint8_t ins[] = { 0xA4, 0xB0, 0xD6, 0xE0, 0xE4, 0xC0,
+                            0x44, 0x04, 0x20, 0x24, 0x2C };
     for (unsigned i = 0; i < sizeof(ins); i++) {
-        const uint8_t cmd[] = { 0x00, ins[i], 0x00, 0x00 };
-        const uint16_t sw = send(cmd, sizeof(cmd), NULL);
+        const uint8_t  cmd[] = { 0x00, ins[i], 0x00, 0x00 };
+        const uint16_t sw    = send(cmd, sizeof(cmd), NULL);
         if (sw == SW_INS_NOT_SUPPORTED) {
             (void)printf("      INS %02X answered 6D00: not in the dispatch "
-                         "table?\n", ins[i]);
+                         "table?\n",
+                         ins[i]);
         }
         CHECK(sw != SW_INS_NOT_SUPPORTED);
     }
@@ -254,15 +265,15 @@ TEST(implemented_ins_is_never_6d00)
 TEST(bad_cla_is_diagnosed)
 {
     fresh();
-    const uint8_t sm[]    = { 0x0C, 0xA4, 0x00, 0x00 };
+    const uint8_t sm[] = { 0x0C, 0xA4, 0x00, 0x00 };
     CHECK_HEX(send(sm, sizeof(sm), NULL), SW_SECURE_MESSAGING_NOT_SUPPORTED);
-    const uint8_t chan[]  = { 0x01, 0xA4, 0x00, 0x00 };
+    const uint8_t chan[] = { 0x01, 0xA4, 0x00, 0x00 };
     CHECK_HEX(send(chan, sizeof(chan), NULL), SW_LOGICAL_CHANNEL_NOT_SUPPORTED);
     const uint8_t chain[] = { 0x10, 0xA4, 0x00, 0x00 };
     CHECK_HEX(send(chain, sizeof(chain), NULL), SW_CHAINING_NOT_SUPPORTED);
-    const uint8_t prop[]  = { 0x80, 0xA4, 0x00, 0x00 };
+    const uint8_t prop[] = { 0x80, 0xA4, 0x00, 0x00 };
     CHECK_HEX(send(prop, sizeof(prop), NULL), SW_CLA_NOT_SUPPORTED);
-    const uint8_t ff[]    = { 0xFF, 0xA4, 0x00, 0x00 };
+    const uint8_t ff[] = { 0xFF, 0xA4, 0x00, 0x00 };
     CHECK_HEX(send(ff, sizeof(ff), NULL), SW_CLA_NOT_SUPPORTED);
 }
 
@@ -287,13 +298,15 @@ TEST(malformed_apdu_still_answers)
     uint16_t rsp_len = 0u;
     /* Empty APDU: zero length, and a NULL pointer. Both must produce a
      * well-formed 6700 rather than a crash. */
-    CHECK_EQ(scos_process(&g_card, rsp, 0u, rsp, (uint16_t)sizeof(rsp),
-                          &rsp_len), SCOS_OK);
+    CHECK_EQ(
+        scos_process(&g_card, rsp, 0u, rsp, (uint16_t)sizeof(rsp), &rsp_len),
+        SCOS_OK);
     CHECK_EQ(rsp_len, 2);
     CHECK_HEX(((uint16_t)rsp[0] << 8) | rsp[1], SW_WRONG_LENGTH);
 
-    CHECK_EQ(scos_process(&g_card, NULL, 0u, rsp, (uint16_t)sizeof(rsp),
-                          &rsp_len), SCOS_OK);
+    CHECK_EQ(
+        scos_process(&g_card, NULL, 0u, rsp, (uint16_t)sizeof(rsp), &rsp_len),
+        SCOS_OK);
     CHECK_EQ(rsp_len, 2);
 }
 
@@ -301,8 +314,8 @@ TEST(response_buffer_too_small_is_a_param_error)
 {
     fresh();
     const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00 };
-    uint8_t  rsp[2];
-    uint16_t rsp_len = 0u;
+    uint8_t       rsp[2];
+    uint16_t      rsp_len = 0u;
     /* Exactly 2 bytes is enough for SW alone. */
     CHECK_EQ(scos_process(&g_card, cmd, sizeof(cmd), rsp, 2u, &rsp_len),
              SCOS_OK);
@@ -323,7 +336,7 @@ TEST(reset_clears_selection_but_counts_up)
 {
     fresh();
     const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x2F, 0x00 };
-    CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_OK);
+    CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_MORE_DATA(0x13));
     CHECK(has_current_ef());
 
     scos_reset(&g_card);
@@ -338,14 +351,15 @@ TEST(reset_clears_selection_but_counts_up)
     scos_reset(&g_card);
     CHECK_EQ(g_card.reset_count, 2);
 
-    /* The card still works after a reset. */
-    CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_OK);
+    /* The card still works after a reset. Still a Case 3 SELECT, so still
+     * 61XX -- the point of the check is that it answers at all. */
+    CHECK_HEX(send(cmd, sizeof(cmd), NULL), SW_MORE_DATA(0x13));
 }
 
 TEST(terminated_card_answers_6985)
 {
     fresh();
-    g_card.lifecycle = SCOS_LC_TERMINATED;
+    g_card.lifecycle    = SCOS_LC_TERMINATED;
     const uint8_t cmd[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00 };
     /* A terminated card is a brick, but it must still answer so that a reader
      * can distinguish "terminated" from "dead". */
@@ -366,18 +380,20 @@ TEST(never_fails_to_answer)
     uint8_t  rsp[SCOS_APDU_RSP_MAX];
     uint16_t rsp_len;
 
-    for (unsigned i = 0; i < sizeof(cmd); i++) { cmd[i] = (uint8_t)(i * 7u); }
+    for (unsigned i = 0; i < sizeof(cmd); i++) {
+        cmd[i] = (uint8_t)(i * 7u);
+    }
 
     unsigned answered = 0u;
     for (unsigned cla = 0; cla <= 0xFFu; cla += 17u) {
         for (unsigned ins = 0; ins <= 0xFFu; ins += 13u) {
             for (unsigned len = 0; len <= 261u; len += 7u) {
-                cmd[0] = (uint8_t)cla;
-                cmd[1] = (uint8_t)ins;
+                cmd[0]  = (uint8_t)cla;
+                cmd[1]  = (uint8_t)ins;
                 rsp_len = 0u;
                 const scos_status st =
-                    scos_process(&g_card, cmd, (uint16_t)len,
-                                 rsp, (uint16_t)sizeof(rsp), &rsp_len);
+                    scos_process(&g_card, cmd, (uint16_t)len, rsp,
+                                 (uint16_t)sizeof(rsp), &rsp_len);
                 CHECK_EQ(st, SCOS_OK);
                 CHECK(rsp_len >= 2u);
                 CHECK(rsp_len <= sizeof(rsp));
@@ -395,7 +411,7 @@ int main(void)
 {
     vcard_config cfg;
     vcard_config_default(&cfg);
-    cfg.state_dir = NULL;  /* hermetic in-RAM NVM */
+    cfg.state_dir = NULL; /* hermetic in-RAM NVM */
     cfg.quiet     = true;
     vcard_configure(&cfg);
     if (hal_init() != HAL_OK) {

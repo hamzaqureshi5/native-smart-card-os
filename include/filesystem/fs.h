@@ -65,15 +65,28 @@ uint16_t fs_child_count(uint16_t parent);
 
 /* ---------------------------------------------------------- create/delete -- */
 /*
- * NO ACCESS CONTROL IS ENFORCED ON EITHER OF THESE YET.
+ * ACCESS CONTROL LIVES ABOVE THIS LAYER, AND THAT IS DELIBERATE.
  *
- * On a real card CREATE FILE and DELETE FILE are administrative commands
- * gated behind authentication -- a PIN, or more usually a secure channel to a
- * security domain. Here anyone holding the reader can create and delete files.
- * That is the same hole as the boot loader's, one layer up, and it is tracked
- * as "Unauthorized file access" in docs/threat-model.md against M3. Do not
- * read the checks below as a security boundary; they are structural integrity
- * checks, which is a different thing.
+ * As of M3, CREATE FILE, DELETE FILE and ACTIVATE / DEACTIVATE FILE ARE gated
+ * on the relevant file's ac_admin condition -- but the gate is in the command
+ * handlers (src/filesystem/cmd_create.c, cmd_lifecycle.c), not here.
+ *
+ * The reason is that a condition is evaluated against a SESSION, and fs.c
+ * knows nothing about sessions. Passing the authentication state down would
+ * put a security decision inside the layer whose job is storage, and make
+ * every future caller of fs_create_file() responsible for supplying it
+ * correctly -- including callers written by someone who did not know it
+ * mattered. See include/security/ac.h.
+ *
+ * So: the checks in THIS file are structural integrity checks, which is a
+ * different thing from a security boundary, and calling fs_create_file()
+ * directly bypasses access control by design. The only caller that should is
+ * fs_personalise().
+ *
+ * Still unauthenticated on a factory card: the MF ships with ac_admin =
+ * FS_AC_ALWAYS, because a card whose root cannot be written to has no way to
+ * receive its first file. An issuer tightens it. Tracked in
+ * docs/threat-model.md.
  */
 
 /*
@@ -108,16 +121,51 @@ fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
  *   - only a direct child of the current DF, never a global search, for the
  *     same isolation reason fs_select_by_fid has no global search
  *
- * KNOWN LIMITATION: the EF's data bytes are NOT reclaimed. fs_store's data
- * area is a bump allocator, so deleting a file frees its descriptor slot but
- * leaks its data space. Compaction needs a way to move data atomically, which
- * needs M4. fs_store_data_free() therefore only ever decreases.
+ * The EF's data bytes ARE reclaimed, as of M4. This used to read "KNOWN
+ * LIMITATION: the EF's data bytes are NOT reclaimed" -- fs_store's data area
+ * was a bump allocator, so deleting freed the descriptor slot and stranded the
+ * data space, and the fix was expected to be compaction, which needs atomic
+ * data movement.
+ *
+ * It was not compaction in the end. The allocator derives free space from the
+ * live descriptors, so a freed slot's extent simply stops being in use and the
+ * next file that fits reuses it. fs_store_data_free() goes back up on delete.
  *
  * If the deleted file was selected, `sel` is moved back to the containing DF --
  * leaving a selection pointing at a freed slot would let the next command act
  * on whatever is written there later.
  */
 fs_status fs_delete_file(fs_selection *sel, uint16_t file_id);
+
+/* ------------------------------------------------------------- life cycle -- */
+/*
+ * Move a file between ACTIVATED and DEACTIVATED (ISO/IEC 7816-9 ACTIVATE FILE
+ * and DEACTIVATE FILE).
+ *
+ * ONLY those two states, and only between each other. The transitions this
+ * REFUSES are the interesting part:
+ *
+ *   - anything out of TERMINATED. Termination is irreversible by design; a
+ *     card that could un-terminate a file would make the state worthless as a
+ *     control, and TERMINATED is what a future TERMINATE CARD relies on.
+ *   - deactivating the MF. The MF is the only entry point to the tree, so
+ *     turning it off is not an administrative action, it is bricking the card
+ *     with no way back. Taking a whole card out of service is what TERMINATE
+ *     CARD is for, and it is deliberately a different command.
+ *   - CREATION and INITIALISED as either endpoint. A file mid-personalisation
+ *     is not something the rest of the OS is built to handle, and quietly
+ *     dragging it into ACTIVATED would hide an incomplete personalisation.
+ *
+ * Setting the state a file is already in SUCCEEDS. That is not laxity: if the
+ * response to a DEACTIVATE is lost on the link, the reader's only recourse is
+ * to send it again, and failing the retry would leave a correct reader unable
+ * to finish a correct sequence.
+ *
+ * Access control is applied by the CALLER, exactly as for create and delete
+ * above: scos_cmd_activate_file()/scos_cmd_deactivate_file() check ac_admin
+ * before calling this. Calling it directly bypasses that, by design.
+ */
+fs_status fs_set_lifecycle(uint16_t index, fs_lifecycle want);
 
 /* --------------------------------------------------------------- selection -- */
 

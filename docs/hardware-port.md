@@ -2,7 +2,7 @@
 
 ## Current status
 
-`src/hal/samsung/` is a **placeholder containing no chip-specific code.**
+`src/hal/s3m228a/` is a **placeholder containing no chip-specific code.**
 
 No Samsung datasheet, reference manual, SDK or errata has been consulted. There
 are no register addresses, no memory map, no boot sequence, no crypto peripheral
@@ -11,7 +11,7 @@ would be worse than useless -- it would produce code that looks like a port and
 is fiction.
 
 Every function in the stub returns `HAL_ERR_UNSUPPORTED`, and the file
-**refuses to compile** without `-DSCOS_ACK_SAMSUNG_STUB=ON`. A HAL that quietly
+**refuses to compile** without `-DSCOS_ACK_S3M228A_STUB=ON`. A HAL that quietly
 returns plausible values is far more dangerous than one that will not build: it
 would let the OS appear to work while writing nothing to real NVM.
 
@@ -98,6 +98,116 @@ differently than assumed.
 * how the OS image is signed, verified and programmed
 * how debug is disabled for production, and whether that is irreversible
 * the lifecycle-state mechanism the chip enforces in hardware
+
+## A hardware requirement discovered in M3: the TRNG
+
+The PIN verifier is a salted hash, and the salt comes from
+`crypto_random_bytes()` -> `hal_random_bytes()`. On this simulator that is a
+**seeded xorshift PRNG**, reproducible on purpose so tests are deterministic --
+which means two simulated cards draw the identical salt.
+
+That is fine for a simulator and fatal on a card. A part whose TRNG is
+predictable has, in effect, no salt at all: identical PINs produce identical
+verifiers, so one precomputed table breaks every card in a batch, and a
+verifier read from one card gives you the PIN of another.
+
+So the port must establish, from documentation:
+
+* how the TRNG is started and read;
+* how its **health test** reports failure -- and that failure must surface as
+  `HAL_ERR` rather than as zeroes, because `crypto_random_bytes()` refuses
+  rather than falling back to a software PRNG, and that refusal is only useful
+  if the HAL tells the truth;
+* whether the part is certified for the entropy source (AIS-31, SP 800-90B or
+  equivalent), since that is the claim a security evaluation will ask about.
+
+A test asserting cross-card salt uniqueness cannot pass on this HAL and was
+deliberately removed rather than weakened; see the note in `docs/roadmap.md`
+under M3. It should be **re-added as the first test of any real port**.
+
+---
+
+## A real reference point: Samsung S3M228A
+
+Samsung publishes a product page for the **S3M228A**, a SIM part in mass
+production. What it states:
+
+| | S3M228A |
+|---|---|
+| Core | **ARM SecurCore SC000**, 14 MHz |
+| Architecture | ARMv6-M (Cortex-M0 class) |
+| Flash | 228 KB |
+| RAM | **5 KB** |
+| Interface | ISO 7816 |
+
+Source: <https://semiconductor.samsung.com/security-solution/ese-esim-sim/part-number/s3m228a/>
+
+### What this confirms
+
+The choice of an ARM core for SCV1 was a documented assumption -- `scv1.h` says
+SIM and eSE parts "commonly use ARM SecurCore SC000/SC300". A shipping Samsung
+SIM part bears that out. The core family was the right guess.
+
+### What it warns about
+
+**1. SC000 is ARMv6-M, and SCV1 is ARMv7-M.** That is not a detail. Our boot
+ROM hands the core to the OS by writing `SCB->VTOR` to relocate the vector
+table, and **Cortex-M0-class cores have no VTOR** -- the table is fixed at
+address 0. If SC000 follows Cortex-M0 here, `boot_jump()` in
+`src/hal/arm-scv1/boot_main.c` cannot work on such a part, and the handover
+needs a different design: a fixed trampoline in mask ROM that forwards each
+exception to a table the OS registers, or a RAM-based table if the part
+supports remapping.
+
+NOT VERIFIED. Cortex-M0 has no VTOR; whether SecurCore SC000 adds one is a
+question for the ARM SecurCore SC000 Technical Reference Manual, and SecurCore
+variants do differ from their Cortex-M base. Treat this as a risk to check
+before relying on it either way.
+
+The OS core itself is fine: all 17 core and boot translation units compile
+clean for `-mcpu=cortex-m0`, at about 13% more code than for Cortex-M3
+(19,734 vs 17,408 bytes of text). The CI has an `armv6m` job so this cannot
+silently regress.
+
+**2. 5 KB of RAM is less than our OS budget.** `SCOS_OS_RAM_BUDGET_BYTES` is
+8 KB -- larger than that entire part's RAM, which is also shared with the
+stack. Actual use is only 796 bytes (`sizeof(scos_kernel)`), so the OS would
+fit; the *budget* is the fiction.
+
+The geometry has deliberately NOT been changed to match. Reasons, recorded so
+the decision is not relitigated blindly:
+
+* Samsung publishes one storage figure, "Flash 228 KB". Our model has separate
+  CODE, EEPROM and DFLASH regions with different page sizes and endurance.
+  Splitting 228 KB across them would be our invention wearing a vendor's
+  number -- on a flash-only part, EEPROM is emulated in flash and the
+  code/data partition is an OS-vendor decision, not silicon.
+* `SCOS_SIM_ROM_KB` would lose its meaning entirely: the real part has no
+  separate ROM.
+* Adopting the sizes while keeping a Cortex-M3 core and a VTOR-based boot
+  loader would make SCV1 *look* validated against a real part while remaining
+  incompatible with it. A chimera is worse than an honest invention.
+
+It builds and passes if you want the pressure -- 16 of 17 tests, the one
+failure being a test that hardcodes the flash size:
+
+```sh
+cmake -S . -B build-tight -DSCOS_SIM_RAM_KB=5 -DSCOS_SIM_FLASH_KB=148
+```
+
+**3. Chaining, not buffering, for extended APDUs.** With 5 KB of RAM shared
+with the stack, a 65535-byte command data field is not a tight fit -- it is
+impossible, and raising the simulated RAM would not change that. Whatever
+extended-length support lands must chain. This is now grounded in a shipping
+part rather than in an argument.
+
+### What it does NOT unlock
+
+A product page is not a datasheet. It gives the core family, clock, memory
+sizes and interface. It gives no memory map, no register addresses, no
+flash-programming sequence, no boot procedure and no crypto peripheral detail.
+So `src/hal/s3m228a/` stays stubbed. Everything in "Facts to establish from
+that documentation" above is still unestablished.
 
 ## Porting procedure
 

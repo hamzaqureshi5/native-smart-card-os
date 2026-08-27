@@ -28,7 +28,7 @@ void scos_card_loop(scos_kernel *k)
     }
 
     for (;;) {
-        uint32_t received = 0u;
+        uint32_t         received = 0u;
         const hal_status hs =
             hal_card_receive(k->cmd, (uint32_t)sizeof(k->cmd), &received);
 
@@ -53,9 +53,8 @@ void scos_card_loop(scos_kernel *k)
         k->cmd_len = (uint16_t)received;
         k->rsp_len = 0u;
 
-        if (scos_process(k, k->cmd, k->cmd_len,
-                         k->rsp, (uint16_t)sizeof(k->rsp),
-                         &k->rsp_len) != SCOS_OK) {
+        if (scos_process(k, k->cmd, k->cmd_len, k->rsp,
+                         (uint16_t)sizeof(k->rsp), &k->rsp_len) != SCOS_OK) {
             continue;
         }
 

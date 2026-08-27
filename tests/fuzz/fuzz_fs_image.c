@@ -54,8 +54,8 @@ int scos_fuzz_fs_image(const uint8_t *data, size_t size)
     }
 
     /* Overwrite the superblock and descriptor table region with the input. */
-    const uint32_t region = 16u + (32u * 20u);   /* superblock + 32 slots */
-    uint32_t n = (size < region) ? (uint32_t)size : region;
+    const uint32_t region = 16u + (32u * 20u); /* superblock + 32 slots */
+    uint32_t       n      = (size < region) ? (uint32_t)size : region;
     if (n > 0u) {
         if (hal_nvm_write(HAL_NVM_EEPROM, 0u, data, n) != HAL_OK) {
             __builtin_trap();
@@ -63,7 +63,7 @@ int scos_fuzz_fs_image(const uint8_t *data, size_t size)
     }
 
     /* Now boot on it. Any outcome is acceptable except crashing or lying. */
-    scos_kernel card;
+    scos_kernel       card;
     const scos_status st = scos_init(&card);
 
     if (st != SCOS_OK) {
@@ -72,11 +72,11 @@ int scos_fuzz_fs_image(const uint8_t *data, size_t size)
             __builtin_trap();
         }
         /* And it must still answer, so a reader can diagnose it. */
-        uint8_t  rsp[SCOS_APDU_RSP_MAX];
-        uint16_t rsp_len = 0u;
-        const uint8_t sel[] = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00 };
-        if (scos_process(&card, sel, sizeof(sel), rsp,
-                         (uint16_t)sizeof(rsp), &rsp_len) != SCOS_OK) {
+        uint8_t       rsp[SCOS_APDU_RSP_MAX];
+        uint16_t      rsp_len = 0u;
+        const uint8_t sel[]   = { 0x00, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00 };
+        if (scos_process(&card, sel, sizeof(sel), rsp, (uint16_t)sizeof(rsp),
+                         &rsp_len) != SCOS_OK) {
             __builtin_trap();
         }
         if (rsp_len < 2u) {
@@ -94,7 +94,7 @@ int scos_fuzz_fs_image(const uint8_t *data, size_t size)
     for (uint16_t i = 0; i < slots; i++) {
         fs_descriptor d;
         if (fs_get(i, &d) != FS_OK) {
-            continue;   /* free or corrupt: both fine */
+            continue; /* free or corrupt: both fine */
         }
         (void)fs_child_count(i);
 
@@ -103,7 +103,7 @@ int scos_fuzz_fs_image(const uint8_t *data, size_t size)
             uint16_t got = 0u;
             (void)fs_ef_read(i, 0u, (uint16_t)sizeof(buf), buf, &got);
             if (got > sizeof(buf)) {
-                __builtin_trap();   /* reported more than the buffer holds */
+                __builtin_trap(); /* reported more than the buffer holds */
             }
             /* And near the declared end, where an off-by-one would show. */
             if (d.size > 4u) {
@@ -123,8 +123,8 @@ int scos_fuzz_fs_image(const uint8_t *data, size_t size)
     for (unsigned i = 0; i < 4u; i++) {
         uint8_t  rsp[SCOS_APDU_RSP_MAX];
         uint16_t rsp_len = 0u;
-        if (scos_process(&card, apdus[i], lens[i], rsp,
-                         (uint16_t)sizeof(rsp), &rsp_len) != SCOS_OK) {
+        if (scos_process(&card, apdus[i], lens[i], rsp, (uint16_t)sizeof(rsp),
+                         &rsp_len) != SCOS_OK) {
             __builtin_trap();
         }
         if (rsp_len < 2u) {

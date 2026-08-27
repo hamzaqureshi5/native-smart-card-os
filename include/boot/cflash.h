@@ -28,14 +28,15 @@
 
 typedef enum {
     CF_OK = 0,
-    CF_ERR_PARAM,       /* null pointer or zero-size region                */
-    CF_ERR_RANGE,       /* offset+length outside the region                */
-    CF_ERR_ALIGN,       /* erase offset is not on a page boundary          */
-    CF_ERR_NOT_ERASED   /* the write would need to set a bit from 0 to 1   */
+    CF_ERR_PARAM,     /* null pointer or zero-size region                */
+    CF_ERR_RANGE,     /* offset+length outside the region                */
+    CF_ERR_ALIGN,     /* erase offset is not on a page boundary          */
+    CF_ERR_NOT_ERASED /* the write would need to set a bit from 0 to 1   */
 } cf_status;
 
 /* Erase one page. off must be page-aligned; page_size must be non-zero. */
-cf_status cf_erase_page(uint8_t *base, uint32_t size, uint32_t page_size, uint32_t off);
+cf_status cf_erase_page(uint8_t *base, uint32_t size, uint32_t page_size,
+                        uint32_t off);
 
 /* Erase the whole region, page by page. */
 cf_status cf_erase_all(uint8_t *base, uint32_t size, uint32_t page_size);

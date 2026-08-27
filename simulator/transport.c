@@ -32,29 +32,58 @@
  * split is what lets a test client read stdout as a pure response stream.
  */
 #include "hal/hal.h"
+#include "os/scos_config.h"
 #include "hal/sim/vcard.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-/* Generous: 261 command bytes is 522 hex characters, plus whitespace. */
-#define LINE_MAX 2048
+/*
+ * A command APDU arrives as hex, so a line must hold twice the largest APDU
+ * plus whitespace and the newline. SCOS_APDU_CMD_MAX is 1033 with the current
+ * extended-length ceiling, which is 2066 hex characters -- past the 2048 this
+ * used to be. Derived from the constant rather than restated, so raising
+ * SCOS_APDU_EXT_DATA_MAX cannot silently make the largest legal command
+ * unsendable on the simulator.
+ */
+#define LINE_MAX ((SCOS_APDU_CMD_MAX * 2u) + 64u)
 
 static int hex_nibble(int ch)
 {
-    if (ch >= '0' && ch <= '9') { return ch - '0'; }
-    if (ch >= 'a' && ch <= 'f') { return ch - 'a' + 10; }
-    if (ch >= 'A' && ch <= 'F') { return ch - 'A' + 10; }
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return ch - 'A' + 10;
+    }
     return -1;
 }
 
 /* Decode ASCII hex, ignoring whitespace and ':' separators.
  * Returns the byte count, or -1 on a bad character / odd digit count /
  * overflow of the destination. */
+/*
+ * Returns the number of bytes decoded, or one of:
+ *
+ *   HEX_ERR_SYNTAX    not hex, or an odd number of digits. A TRANSPORT fault.
+ *   HEX_ERR_TOO_LONG  well-formed hex, more bytes than the card can receive.
+ *                     A CARD-LEVEL fault -- see the caller.
+ *
+ * The two were the same value until extended length made the difference
+ * observable, and telling them apart is what lets an over-long command get a
+ * status word instead of silence.
+ */
+#define HEX_ERR_SYNTAX   (-1)
+#define HEX_ERR_TOO_LONG (-2)
+
 static long hex_decode(const char *in, uint8_t *out, uint32_t cap)
 {
-    uint32_t n    = 0u;
-    int      hi   = -1;
+    uint32_t n  = 0u;
+    int      hi = -1;
 
     for (const char *p = in; *p != '\0'; p++) {
         const char ch = *p;
@@ -63,20 +92,20 @@ static long hex_decode(const char *in, uint8_t *out, uint32_t cap)
         }
         const int v = hex_nibble((unsigned char)ch);
         if (v < 0) {
-            return -1;
+            return HEX_ERR_SYNTAX;
         }
         if (hi < 0) {
             hi = v;
         } else {
             if (n >= cap) {
-                return -1; /* would overflow: reject, never truncate */
+                return HEX_ERR_TOO_LONG;
             }
             out[n++] = (uint8_t)((hi << 4) | v);
-            hi = -1;
+            hi       = -1;
         }
     }
     if (hi >= 0) {
-        return -1; /* odd number of hex digits */
+        return HEX_ERR_SYNTAX; /* odd number of hex digits */
     }
     return (long)n;
 }
@@ -95,13 +124,19 @@ static void print_atr(void)
 static void print_help(void)
 {
     (void)fprintf(stderr,
-        "Send an APDU as hex, e.g.  00 A4 00 00 02 3F 00\n"
-        "Control lines:\n"
-        "  .atr     print the Answer To Reset\n"
-        "  .reset   warm reset (clears volatile state, keeps NVM)\n"
-        "  .quit    power down and exit\n"
-        "  .help    this text\n"
-        "  #...     comment\n");
+                  "Send an APDU as hex, e.g.  00 A4 00 00 02 3F 00\n"
+                  "Control lines:\n"
+                  "  .atr     print the Answer To Reset\n"
+                  "  .reset   warm reset (clears volatile state, keeps NVM)\n"
+                  "  .quit    power down and exit (flushes NVM durably)\n"
+                  "  .tear    power FAILURE: exit WITHOUT flushing NVM\n"
+                  "  .fault N       cut the next NVM write after N bytes\n"
+                  "  .fault SKIP N  let SKIP writes through, then cut\n"
+                  "  .hold          keep failing writes after the cut\n"
+                  "  .fault   disarm\n"
+                  "  .fired   FIRED / NOTFIRED -- did the armed fault go off?\n"
+                  "  .help    this text\n"
+                  "  #...     comment\n");
     (void)fflush(stderr);
 }
 
@@ -143,6 +178,117 @@ static int handle_control(const char *line)
         print_help();
         return 1;
     }
+    /*
+     * .fault N -- arm the next hal_nvm_write() to store N bytes and then report
+     * power loss.
+     *
+     * Exposed on the transport, and only on the SIMULATOR transport, because
+     * without it a power-failure test can only run inside one process. The C
+     * unit tests can call vcard_fault_after_bytes() directly, but they cannot
+     * demonstrate the case that actually matters to a card: an interrupted
+     * write that is still interrupted after the reader takes the card away and
+     * puts it back. That needs two sessions over a state directory, which means
+     * the test client needs a way to say it.
+     *
+     * NOT reachable by the OS. The OS sees hal_nvm_write() returning
+     * HAL_ERR_POWER and nothing else; there is no query for "am I being
+     * fault-injected", deliberately, or a future version could behave
+     * differently under test than in the field.
+     */
+    if (strncmp(line, ".fault", 6u) == 0) {
+        const char *arg = line + 6u;
+        while (*arg == ' ' || *arg == '\t') {
+            arg++;
+        }
+        if (*arg == '\0') {
+            vcard_fault_clear();
+            (void)fprintf(stderr, "fault: disarmed\n");
+            (void)fflush(stderr);
+            return 1;
+        }
+        /* strtoul over a trimmed line; a trailing non-digit is a typo worth
+         * reporting rather than silently truncating, because "arm at 100" and
+         * "arm at 1" are very different tests. */
+        /*
+         * ".fault N" cuts the next write after N bytes.
+         * ".fault SKIP N" lets SKIP writes through first, then cuts.
+         *
+         * The two-argument form is the one that matters. Every command now
+         * begins by writing the journal header, so a one-argument arming always
+         * lands there and the command aborts before touching any data -- which
+         * made the first version of the tear tests pass without exercising
+         * anything.
+         */
+        char         *end = NULL;
+        unsigned long a1  = strtoul(arg, &end, 10);
+        if (end == arg) {
+            (void)fprintf(stderr, "fault: '%s' is not a number\n", arg);
+            (void)fflush(stderr);
+            return 1;
+        }
+        while (end != NULL && (*end == ' ' || *end == '\t')) {
+            end++;
+        }
+        unsigned long skip = 0u;
+        unsigned long n    = a1;
+        if (end != NULL && *end != '\0') {
+            const char   *second = end;
+            char         *e2     = NULL;
+            unsigned long a2     = strtoul(second, &e2, 10);
+            if (e2 == second || (e2 != NULL && *e2 != '\0')) {
+                (void)fprintf(stderr, "fault: '%s' is not a byte count\n",
+                              second);
+                (void)fflush(stderr);
+                return 1;
+            }
+            skip = a1;
+            n    = a2;
+        }
+        vcard_fault_at_write((uint32_t)skip, (uint32_t)n);
+        (void)fprintf(stderr, "fault: NVM write #%lu stops after %lu byte(s)\n",
+                      skip + 1u, n);
+        (void)fflush(stderr);
+        return 1;
+    }
+    /*
+     * .fired -- did the armed fault actually go off?
+     *
+     * A test that asks for an interruption and gets none must FAIL rather than
+     * pass quietly: a suite full of armings that never fired would report
+     * tear resistance it never exercised. Answered on stdout, because the test
+     * client reads stdout as the response stream.
+     */
+    /*
+     * .hold -- keep failing every NVM write once the fault fires, rather than
+     * just the one. What leaves a journal OPEN for the next boot to recover;
+     * see vcard_fault_hold().
+     */
+    if (strcmp(line, ".hold") == 0) {
+        vcard_fault_hold(true);
+        (void)fprintf(stderr,
+                      "fault: will hold (every write fails once cut)\n");
+        (void)fflush(stderr);
+        return 1;
+    }
+    if (strcmp(line, ".fired") == 0) {
+        (void)printf("%s\n", vcard_fault_fired() ? "FIRED" : "NOTFIRED");
+        (void)fflush(stdout);
+        return 1;
+    }
+    /*
+     * .tear -- power failure, as distinct from .quit.
+     *
+     * .quit powers the card down cleanly and flushes NVM durably, which models
+     * an orderly end of session and cannot lose anything. .tear skips the
+     * flush, so the session's unwritten state is gone -- which is the whole
+     * point.
+     */
+    if (strcmp(line, ".tear") == 0) {
+        vcard_power_failure();
+        (void)fprintf(stderr, "tear: power removed WITHOUT flushing\n");
+        (void)fflush(stderr);
+        return -1;
+    }
     (void)fprintf(stderr, "unknown control '%s' (try .help)\n", line);
     (void)fflush(stderr);
     return 1;
@@ -152,7 +298,7 @@ static void trim(char *s)
 {
     size_t n = strlen(s);
     while (n > 0u && (s[n - 1u] == '\n' || s[n - 1u] == '\r' ||
-                      s[n - 1u] == ' '  || s[n - 1u] == '\t')) {
+                      s[n - 1u] == ' ' || s[n - 1u] == '\t')) {
         s[--n] = '\0';
     }
 }
@@ -189,7 +335,7 @@ hal_status hal_card_receive(uint8_t *buf, uint32_t cap, uint32_t *out_len)
         }
 
         const long n = hex_decode(line, buf, cap);
-        if (n < 0) {
+        if (n == HEX_ERR_SYNTAX) {
             /*
              * A malformed hex line is a TRANSPORT error, not a card error. On
              * real hardware the link layer would NAK it and the OS would never
@@ -198,7 +344,40 @@ hal_status hal_card_receive(uint8_t *buf, uint32_t cap, uint32_t *out_len)
              * teach the test client that garbage input produces 6700 from the
              * card. Report on stderr and wait for the next line.
              */
-            (void)fprintf(stderr, "transport: not valid hex (or too long)\n");
+            (void)fprintf(stderr, "transport: not valid hex\n");
+            (void)fflush(stderr);
+            continue;
+        }
+        if (n == HEX_ERR_TOO_LONG) {
+            /*
+             * A well-formed command longer than the card can receive. This is
+             * NOT a transport fault, and dropping it silently -- which is what
+             * this code did before extended length existed -- makes the card
+             * appear dead for a frame it should have answered.
+             *
+             * A real T=0 card sees the header first and answers from it: the
+             * reader sends CLA INS P1 P2 P3 and waits for a procedure byte, so
+             * the card can refuse before a single data byte moves. The model
+             * here is the same shape -- hand the OS the leading bytes that DID
+             * fit and let the parser reach its own verdict, which for any such
+             * frame is 6700 (LC_TOO_LARGE if the extended Lc is above the
+             * ceiling, BAD_LENGTH if the frame merely disagrees with its own
+             * length field).
+             *
+             * The card is never told the frame was truncated, because a real
+             * card is not told either. It answers from what it has.
+             */
+            (void)fprintf(stderr,
+                          "transport: command exceeds %u bytes; delivering "
+                          "the leading bytes so the card can answer\n",
+                          (unsigned)cap);
+            (void)fflush(stderr);
+            *out_len = cap;
+            return HAL_OK;
+        }
+        if (n < 0) {
+            /* Unreachable: hex_decode returns only the two errors above. */
+            (void)fprintf(stderr, "transport: internal decode error\n");
             (void)fflush(stderr);
             continue;
         }
@@ -224,6 +403,4 @@ hal_status hal_card_send(const uint8_t *buf, uint32_t len)
 }
 
 const uint8_t *hal_card_atr(uint32_t *out_len)
-{
-    return vcard_atr(out_len);
-}
+{ return vcard_atr(out_len); }

@@ -19,7 +19,6 @@
 static bool s_initialised = false;
 #include "semihost.h"
 
-
 /* --------------------------------------------------------------- driver --- */
 
 /* Must run before ANY output. The banner is printed before the first
@@ -34,7 +33,7 @@ void scv1_uart_init(void)
 
 static void uart_putc(char c)
 {
-    while ((SCV1_UART_STATE & SCV1_UART_STATE_TX_FULL) != 0u) { }
+    while ((SCV1_UART_STATE & SCV1_UART_STATE_TX_FULL) != 0u) {}
     SCV1_UART_DATA = (uint32_t)(unsigned char)c;
 }
 
@@ -43,7 +42,7 @@ static void uart_putc(char c)
  * concurrency to gain -- see docs/architecture.md. */
 static int uart_getc(void)
 {
-    while ((SCV1_UART_STATE & SCV1_UART_STATE_RX_FULL) == 0u) { }
+    while ((SCV1_UART_STATE & SCV1_UART_STATE_RX_FULL) == 0u) {}
     return (int)(SCV1_UART_DATA & 0xFFu);
 }
 
@@ -58,9 +57,15 @@ void scv1_uart_puts(const char *s)
 
 static int hex_nibble(int ch)
 {
-    if (ch >= '0' && ch <= '9') { return ch - '0'; }
-    if (ch >= 'a' && ch <= 'f') { return ch - 'a' + 10; }
-    if (ch >= 'A' && ch <= 'F') { return ch - 'A' + 10; }
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return ch - 'A' + 10;
+    }
     return -1;
 }
 
@@ -124,14 +129,14 @@ hal_status hal_card_receive(uint8_t *buf, uint32_t cap, uint32_t *out_len)
     for (;;) {
         /* Collect one line. Decoding happens as bytes arrive so no separate
          * line buffer is needed beyond bounds tracking -- RAM is 16 KB. */
-        uint32_t n         = 0u;
-        int      hi        = -1;
-        bool     bad       = false;
-        uint32_t seen      = 0u;
-        char     first     = '\0';
+        uint32_t n          = 0u;
+        int      hi         = -1;
+        bool     bad        = false;
+        uint32_t seen       = 0u;
+        char     first      = '\0';
         bool     is_control = false;
         char     control[16];
-        uint32_t clen      = 0u;
+        uint32_t clen = 0u;
 
         for (;;) {
             const int c = uart_getc();
@@ -183,14 +188,14 @@ hal_status hal_card_receive(uint8_t *buf, uint32_t cap, uint32_t *out_len)
                 continue;
             }
             /* Minimal string compares; no libc on this target. */
-            if (control[1] == 'q') {         /* .quit */
+            if (control[1] == 'q') { /* .quit */
                 return HAL_ERR_LINK_DOWN;
             }
-            if (control[1] == 'a') {         /* .atr */
+            if (control[1] == 'a') { /* .atr */
                 send_atr();
                 continue;
             }
-            if (control[1] == 'r') {         /* .reset */
+            if (control[1] == 'r') { /* .reset */
                 /* The link answers a reset with the ATR -- that is the
                  * interface block's job on real silicon, not the OS's. The OS
                  * is told via HAL_CARD_RESET and clears its volatile state. */

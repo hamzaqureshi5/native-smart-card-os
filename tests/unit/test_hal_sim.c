@@ -16,7 +16,7 @@
 TEST(regions_report_plausible_geometry)
 {
     CHECK_EQ(hal_nvm_size(HAL_NVM_EEPROM), SCOS_EEPROM_BYTES);
-    CHECK_EQ(hal_nvm_size(HAL_NVM_FLASH),  SCOS_FLASH_BYTES);
+    CHECK_EQ(hal_nvm_size(HAL_NVM_FLASH), SCOS_FLASH_BYTES);
 
     /* Page size must be non-zero and a power of two: the transaction manager
      * will do modulo arithmetic with it. */
@@ -53,20 +53,20 @@ TEST(write_then_read_roundtrip)
     /* A write must not disturb its neighbours -- the bug that page-granular
      * hardware makes easy to introduce. */
     uint8_t before = 0u, after = 0u;
-    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 99u,  &before, 1u), HAL_OK);
-    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 107u, &after,  1u), HAL_OK);
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 99u, &before, 1u), HAL_OK);
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 107u, &after, 1u), HAL_OK);
     CHECK_HEX(before, 0xFF);
-    CHECK_HEX(after,  0xFF);
+    CHECK_HEX(after, 0xFF);
 }
 
 TEST(regions_are_independent)
 {
-    const uint8_t a = 0xAA;
-    const uint8_t b = 0xBB;
-    uint8_t got = 0u;
+    const uint8_t a   = 0xAA;
+    const uint8_t b   = 0xBB;
+    uint8_t       got = 0u;
 
     CHECK_EQ(hal_nvm_write(HAL_NVM_EEPROM, 0u, &a, 1u), HAL_OK);
-    CHECK_EQ(hal_nvm_write(HAL_NVM_FLASH,  0u, &b, 1u), HAL_OK);
+    CHECK_EQ(hal_nvm_write(HAL_NVM_FLASH, 0u, &b, 1u), HAL_OK);
     CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 0u, &got, 1u), HAL_OK);
     CHECK_HEX(got, 0xAA);
     CHECK_EQ(hal_nvm_read(HAL_NVM_FLASH, 0u, &got, 1u), HAL_OK);
@@ -80,12 +80,12 @@ TEST(regions_are_independent)
  */
 TEST(out_of_range_access_is_refused)
 {
-    uint8_t buf[16];
+    uint8_t        buf[16];
     const uint32_t size = hal_nvm_size(HAL_NVM_EEPROM);
 
-    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, size, buf, 1u),      HAL_ERR_RANGE);
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, size, buf, 1u), HAL_ERR_RANGE);
     CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, size - 1u, buf, 2u), HAL_ERR_RANGE);
-    CHECK_EQ(hal_nvm_write(HAL_NVM_EEPROM, size, buf, 1u),     HAL_ERR_RANGE);
+    CHECK_EQ(hal_nvm_write(HAL_NVM_EEPROM, size, buf, 1u), HAL_ERR_RANGE);
 
     /* The integer-overflow cases. */
     CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 0xFFFFFFFFu, buf, 1u), HAL_ERR_RANGE);
@@ -103,11 +103,11 @@ TEST(out_of_range_access_is_refused)
 TEST(null_and_zero_length_are_handled)
 {
     uint8_t buf[4];
-    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 0u, NULL, 4u),  HAL_ERR_PARAM);
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 0u, NULL, 4u), HAL_ERR_PARAM);
     CHECK_EQ(hal_nvm_write(HAL_NVM_EEPROM, 0u, NULL, 4u), HAL_ERR_PARAM);
     /* Zero length is a no-op success, not an error: callers loop over ranges
      * that can legitimately be empty. */
-    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 0u, buf, 0u),  HAL_OK);
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 0u, buf, 0u), HAL_OK);
     CHECK_EQ(hal_nvm_write(HAL_NVM_EEPROM, 0u, buf, 0u), HAL_OK);
 
     /* An undefined region must be refused, not silently mapped somewhere. */
@@ -128,7 +128,7 @@ TEST(rng_produces_output_and_respects_bounds)
     CHECK(!os_memeq_ct(a, b, sizeof(a)));
 
     CHECK_EQ(hal_random_bytes(NULL, 4u), HAL_ERR_PARAM);
-    CHECK_EQ(hal_random_bytes(a, 0u),    HAL_OK);
+    CHECK_EQ(hal_random_bytes(a, 0u), HAL_OK);
 
     /* Odd sizes must not overrun: the generator works in 8-byte blocks, so a
      * length that is not a multiple of 8 is the interesting case. */
@@ -167,7 +167,7 @@ TEST(power_state_gates_nvm)
     CHECK_EQ(vcard_power_get(), VCARD_POWER_OFF);
     /* An unpowered chip cannot serve memory. Returning zeros instead would
      * let the OS mistake "no power" for "erased data". */
-    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 0u, buf, 4u),  HAL_ERR_POWER);
+    CHECK_EQ(hal_nvm_read(HAL_NVM_EEPROM, 0u, buf, 4u), HAL_ERR_POWER);
     CHECK_EQ(hal_nvm_write(HAL_NVM_EEPROM, 0u, buf, 4u), HAL_ERR_POWER);
     CHECK_EQ(hal_nvm_sync(), HAL_ERR_POWER);
     CHECK_EQ(hal_random_bytes(buf, 4u), HAL_ERR_POWER);
@@ -182,7 +182,7 @@ TEST(power_state_gates_nvm)
 TEST(volatile_nvm_is_lost_on_power_cycle)
 {
     const uint8_t marker = 0x42;
-    uint8_t got = 0u;
+    uint8_t       got    = 0u;
 
     CHECK_EQ(hal_nvm_write(HAL_NVM_FLASH, 4096u, &marker, 1u), HAL_OK);
     CHECK_EQ(hal_nvm_read(HAL_NVM_FLASH, 4096u, &got, 1u), HAL_OK);
@@ -199,7 +199,7 @@ int main(void)
 {
     vcard_config cfg;
     vcard_config_default(&cfg);
-    cfg.state_dir = NULL;  /* hermetic: no files, no shared state */
+    cfg.state_dir = NULL; /* hermetic: no files, no shared state */
     cfg.quiet     = true;
     vcard_configure(&cfg);
 

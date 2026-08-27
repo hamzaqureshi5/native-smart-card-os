@@ -15,7 +15,8 @@ replaced by a real secure MCU without rewriting the OS.
 > **What works.** A HAL with a bounded surface, two HAL implementations (a
 > native simulator and a real ARM Cortex-M3 target), an ISO 7816-4 APDU parser
 > and dispatcher, a persistent filesystem (MF/DF/transparent EF), SELECT,
-> READ/UPDATE BINARY, CREATE/DELETE FILE, a BER-TLV parser, and a boot loader
+> READ/UPDATE BINARY, CREATE/DELETE FILE, GET RESPONSE/61XX, a BER-TLV parser,
+> and a boot loader
 > in mask ROM that programs a blank chip over the card interface. The same
 > Python suite runs against x86 and against real ARM machine code on QEMU.
 >
@@ -30,15 +31,39 @@ replaced by a real secure MCU without rewriting the OS.
 > * **No authentication anywhere.** The boot loader will load and activate any
 >   image from anyone, and CREATE/DELETE FILE are ungated. See `T11` and
 >   "Unauthorized file access" in [`docs/threat-model.md`](docs/threat-model.md).
-> * **No tear resistance.** Until the transaction journal exists (M4), no claim
->   about surviving a power cut mid-write is justified.
+> * **Partial tear resistance.** M4's undo journal is in: every command is a
+>   transaction, and interrupting `CREATE FILE` or `UPDATE BINARY` at any byte
+>   offset leaves the card byte-identical. But the interruption tests are
+>   **host-only** -- fault injection lives in the simulator HAL, so the ARM
+>   target runs the same code and cannot cut a write mid-flight -- and the
+>   simulator's power-failure model is stricter than real silicon. The honest
+>   claim is "resists power interruption at command granularity on the host",
+>   not "tear-resistant".
 
 ## Quick start
+
+```sh
+# mbedTLS is a submodule. Without this the build stops with a message telling
+# you the same command, but a fresh clone needs it either way.
+git submodule update --init --depth 1 third_party/mbedtls
+
+tools/build.sh          # host and, if the cross toolchain is present, arm
+```
+
+Or by hand:
 
 ```sh
 cmake -S . -B build
 cmake --build build -j
 ctest --test-dir build --output-on-failure
+```
+
+To put the OS on a (simulated) blank chip and talk to it:
+
+```sh
+tools/card load         # builds the ARM firmware if needed, then loads it
+tools/card apdu 00A40000023F00
+tools/card shell        # interactive
 ```
 
 Then talk to the card:
@@ -206,11 +231,26 @@ With `--state-dir`, the virtual chip's memory is written to
 power-up. The OS never sees a file: it goes through `hal_nvm_*`, so the same code
 runs against real NVM later.
 
+## Formatting
+
+The tree is clang-format clean. The style config is `.clang-format`; run the
+checker before committing and CI can never surprise you:
+
+```sh
+pip install --user clang-format==23.1.0   # the version CI pins
+./tools/check-format.sh                   # check
+./tools/check-format.sh --fix             # reformat in place
+```
+
+The version is pinned because clang-format's output changes between releases.
+A different one will mostly work and will mostly also produce a few spurious
+diffs; if yours disagrees with CI, that is why.
+
 ## Build options
 
 | Option | Default | Purpose |
 |---|---|---|
-| `SCOS_HAL` | `simulator` | HAL implementation: `simulator` or `samsung` |
+| `SCOS_HAL` | `simulator` | HAL implementation: `simulator`, `arm-scv1` or `s3m228a` |
 | `SCOS_SANITIZE` | `ON` | AddressSanitizer + UndefinedBehaviorSanitizer |
 | `SCOS_WERROR` | `ON` | warnings are errors |
 | `SCOS_STATIC_ANALYSIS` | `OFF` | GCC `-fanalyzer` |
@@ -254,7 +294,7 @@ a rewrite.
                          HAL          <- include/hal/hal.h, the contract
               +-----------+-----------+
               |                       |
-        Simulator HAL           Samsung HAL
+        Simulator HAL           S3M228A HAL
               |                       |
              PC                 real secure MCU
 ```
@@ -271,7 +311,7 @@ include/hal/sim/      virtual-chip internals (simulator only)
 src/kernel/           kernel; card_loop.c is the only core file touching the HAL
 src/apdu/             parser, dispatcher, response builder, SELECT
 src/hal/simulator/    HAL over the virtual chip
-src/hal/samsung/      placeholder -- contains no Samsung-specific code
+src/hal/s3m228a/      placeholder -- contains no part-specific code
 simulator/            virtual chip, transport, main()
 tests/unit/           core tests (link no HAL) + HAL contract tests
 tests/integration/    layering and budget guards
@@ -307,9 +347,9 @@ reference — memory map, boot flow, slot header, flash semantics — and
 part. `docs/fuzzing.md` covers the fuzz targets and is honest about what they
 are not.
 
-## On Samsung hardware
+## On the Samsung S3M228A
 
-`src/hal/samsung/` exists and is **deliberately unimplemented**. It contains no
+`src/hal/s3m228a/` exists and is **deliberately unimplemented**. It contains no
 register addresses, no memory map, no boot sequence, no crypto peripheral
 interface -- nothing derived from any Samsung documentation, because no such
 documentation has been consulted. Every function returns

@@ -41,7 +41,7 @@ void semihost_probe(void);
 
 /* Non-zero while a probe BKPT is in flight, so the fault handler knows the
  * fault is expected rather than an attack or a bug. */
-int  semihost_probe_in_flight(void);
+int semihost_probe_in_flight(void);
 
 /* Called BY THE FAULT HANDLER when the probe faulted: no host is present. */
 void semihost_probe_faulted(void);
