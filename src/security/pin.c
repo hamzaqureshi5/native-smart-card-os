@@ -425,6 +425,39 @@ pin_status pin_verify(uint8_t ref, const uint8_t *value, uint8_t len,
     return PIN_ERR_WRONG;
 }
 
+pin_status pin_unblock(uint8_t ref)
+{
+    if (!ref_valid(ref)) {
+        return PIN_ERR_PARAM;
+    }
+
+    uint8_t          rec[PIN_RECORD_SIZE];
+    const pin_status rst = read_record(ref, rec);
+    if (rst != PIN_OK) {
+        return rst;
+    }
+
+    if (rec[PIN_OFF_STATE] == (uint8_t)PIN_STATE_UNSET) {
+        /* Nothing to unblock: there is no credential here. Reporting success
+         * would tell a caller the PIN is usable when no PIN exists. */
+        return PIN_ERR_UNSET;
+    }
+    if (rec[PIN_OFF_TRY_LIMIT] == 0u ||
+        rec[PIN_OFF_TRY_LIMIT] > PIN_MAX_TRY_LIMIT) {
+        /* A record whose limit is nonsense cannot have a counter restored to
+         * it. Corrupt rather than repaired: guessing a retry limit is guessing
+         * how many attempts an attacker gets. */
+        return PIN_ERR_CORRUPT;
+    }
+
+    rec[PIN_OFF_STATE] = (uint8_t)PIN_STATE_ACTIVE;
+    rec[PIN_OFF_TRIES] = tally_for_limit(rec[PIN_OFF_TRY_LIMIT]);
+
+    const pin_status wst = write_record(ref, rec);
+    crypto_wipe(rec, sizeof(rec));
+    return wst;
+}
+
 pin_status pin_get(uint8_t ref, pin_info *out)
 {
     if (!ref_valid(ref) || out == NULL) {

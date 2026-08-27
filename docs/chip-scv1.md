@@ -7,6 +7,31 @@
 > documentation arrives, `src/hal/s3m228a/` gets written against it and SCV1
 > stays as the reference target.
 
+
+## Two different "ROM" numbers, and they are easy to conflate
+
+| | value | what it is |
+|---|---|---|
+| `SCV1_OSFLASH_SIZE` | **55 KB** | the actual region the OS links into. A hard limit: exceed it and the linker fails. |
+| `SCOS_SIM_ROM_KB` | 32 KB | a **policy budget**, checked by the `os_fits_in_rom` test against `libscos_core.a`. Nothing in the linker enforces it. |
+
+They measure different things -- the second does not even include the HAL,
+the crypto backend or the vendored library -- so a percentage of one is not a
+percentage of the other. Quoting the linked image's size against the 32 KB
+budget produced a "we are nearly out of ROM" conclusion that was wrong by
+roughly a factor of two, which is why this table exists.
+
+Current, at the time of writing:
+
+```
+libscos_core.a    19,339 B of 32 KB policy budget   59%
+smartcard-os.elf  26,268 B of 55 KB OSFLASH         48%
+scv1-boot.elf      7,700 B of  8 KB BOOTROM         94%   <- the tight one
+```
+
+The boot ROM is the number to watch. It is mask ROM, it cannot be patched
+after manufacture, and it contains no crypto.
+
 ## What is real, and what is ours
 
 Being honest about this line matters more than the design itself.

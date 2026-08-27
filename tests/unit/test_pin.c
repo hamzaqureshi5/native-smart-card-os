@@ -496,6 +496,163 @@ TEST(malformed_change_is_refused_precisely)
     CHECK_HEX(query(PIN_REF_USER), SW_REFERENCE_DATA_NOT_FOUND); /* unchanged */
 }
 
+/* ============================================ RESET RETRY COUNTER ======== */
+
+/* RESET RETRY COUNTER, P1=02 (PUK alone). Lc derived. */
+static uint16_t unblock(const char *puk)
+{
+    uint8_t  c[5u + PIN_MAX_LEN];
+    uint16_t n  = 0u;
+    c[n++]      = 0x00u;
+    c[n++]      = 0x2Cu;
+    c[n++]      = 0x02u;
+    c[n++]      = PIN_REF_USER;
+    uint8_t len = 0u;
+    while (puk[len] != '\0') {
+        len++;
+    }
+    c[n++] = len;
+    for (uint8_t i = 0; i < len; i++) {
+        c[n++] = (uint8_t)puk[i];
+    }
+    return send(c, n);
+}
+
+/* Set up a card with a PUK and a PIN, then block the PIN. */
+static void block_the_pin(void)
+{
+    fresh();
+    CHECK_HEX(set_pin(PIN_REF_UNBLOCK, "87654321"), SW_OK);
+    CHECK_HEX(set_pin(PIN_REF_USER, "1234"), SW_OK);
+    for (int i = 0; i < 3; i++) {
+        (void)verify(PIN_REF_USER, "9999");
+    }
+    CHECK_HEX(query(PIN_REF_USER), SW_AUTH_METHOD_BLOCKED);
+}
+
+TEST(the_puk_unblocks_and_leaves_the_pin_value_alone)
+{
+    /*
+     * The whole point of the PUK-only form. The cardholder who mistyped their
+     * own PIN three times knows it perfectly well, so recovery must not force
+     * them to choose a new one -- and the card CANNOT recover the old value
+     * anyway, only its verifier is stored, which is why pin_unblock() exists
+     * as a primitive separate from pin_set().
+     */
+    block_the_pin();
+
+    CHECK_HEX(unblock("87654321"), SW_OK);
+
+    /* Counter restored, and NOT authenticated: presenting the PUK proves
+     * entitlement to reset the PIN, not knowledge of it. */
+    CHECK_HEX(query(PIN_REF_USER), SW_NVM_CHANGED_PIN_TRIES(3));
+    CHECK(!scos_is_authenticated(&g_card, PIN_REF_USER));
+
+    /* And the ORIGINAL PIN still works -- the value was untouched. */
+    CHECK_HEX(verify(PIN_REF_USER, "1234"), SW_OK);
+}
+
+TEST(the_puk_is_not_a_master_key)
+{
+    /*
+     * Presenting the PUK must not grant PIN authentication. If it did, the PUK
+     * would open every PIN-protected file -- a far larger privilege than the
+     * one a cardholder is given it for, and one an attacker who obtained the
+     * PUK from a letter would inherit.
+     */
+    block_the_pin();
+    CHECK_HEX(unblock("87654321"), SW_OK);
+    CHECK(!scos_is_authenticated(&g_card, PIN_REF_USER));
+    CHECK(!scos_is_authenticated(&g_card, PIN_REF_UNBLOCK));
+}
+
+TEST(a_wrong_puk_costs_a_puk_try)
+{
+    /*
+     * The recovery path is itself limited, or it is just a second PIN with more
+     * attempts. pin_verify() spends the try before comparing, so this command
+     * is no more of a free oracle against the PUK than VERIFY is against the
+     * PIN.
+     */
+    block_the_pin();
+
+    CHECK_HEX(unblock("00000000"), SW_NVM_CHANGED_PIN_TRIES(2));
+    CHECK_HEX(unblock("00000000"), SW_NVM_CHANGED_PIN_TRIES(1));
+    /* The PIN is still blocked throughout: a failed unblock changes nothing. */
+    CHECK_HEX(query(PIN_REF_USER), SW_AUTH_METHOD_BLOCKED);
+
+    /* The third failure blocks the PUK, and now the card really is terminal
+     * for this reference -- the intended end of a limited recovery path. */
+    CHECK_HEX(unblock("00000000"), SW_AUTH_METHOD_BLOCKED);
+    CHECK_HEX(query(PIN_REF_UNBLOCK), SW_AUTH_METHOD_BLOCKED);
+    CHECK_HEX(unblock("87654321"), SW_AUTH_METHOD_BLOCKED); /* even correct */
+    CHECK_HEX(query(PIN_REF_USER), SW_AUTH_METHOD_BLOCKED);
+}
+
+TEST(unblocking_works_on_a_pin_that_is_not_blocked)
+{
+    /* Idempotent, for the same reason every other command here is: a reader
+     * whose response was lost must be able to send it again. Restoring a full
+     * counter is a harmless no-op. */
+    fresh();
+    CHECK_HEX(set_pin(PIN_REF_UNBLOCK, "87654321"), SW_OK);
+    CHECK_HEX(set_pin(PIN_REF_USER, "1234"), SW_OK);
+    CHECK_HEX(verify(PIN_REF_USER, "9999"), SW_NVM_CHANGED_PIN_TRIES(2));
+
+    CHECK_HEX(unblock("87654321"), SW_OK);
+    CHECK_HEX(query(PIN_REF_USER), SW_NVM_CHANGED_PIN_TRIES(3));
+    CHECK_HEX(unblock("87654321"), SW_OK); /* again */
+    CHECK_HEX(query(PIN_REF_USER), SW_NVM_CHANGED_PIN_TRIES(3));
+}
+
+TEST(without_a_puk_a_blocked_pin_is_terminal)
+{
+    /*
+     * A card issued with no PUK has a terminal PIN. That is a personalisation
+     * choice rather than a bug, and 6A88 makes it diagnosable: the reference
+     * data this command needs is not there. NOT 6983, which would describe the
+     * PIN's state rather than the reason recovery is impossible.
+     */
+    fresh();
+    CHECK_HEX(set_pin(PIN_REF_USER, "1234"), SW_OK);
+    for (int i = 0; i < 3; i++) {
+        (void)verify(PIN_REF_USER, "9999");
+    }
+    CHECK_HEX(query(PIN_REF_USER), SW_AUTH_METHOD_BLOCKED);
+    CHECK_HEX(unblock("87654321"), SW_REFERENCE_DATA_NOT_FOUND);
+    CHECK_HEX(query(PIN_REF_USER), SW_AUTH_METHOD_BLOCKED);
+}
+
+TEST(reset_retry_is_refused_precisely)
+{
+    block_the_pin();
+
+    /* P1=00 is a real ISO form -- PUK followed by a new PIN -- that this card
+     * does not implement, because splitting two values in one field needs a
+     * length and storing the PUK's length would leak it. 6A86. */
+    const uint8_t p1_00[] = { 0x00u, 0x2Cu, 0x00u, PIN_REF_USER, 0x08u,
+                              '8',   '7',   '6',   '5',          '4',
+                              '3',   '2',   '1' };
+    CHECK_HEX(send(p1_00, (uint16_t)sizeof(p1_00)), SW_INCORRECT_P1P2);
+
+    /* P2 names the reference being UNBLOCKED. Letting a caller nominate the
+     * unblocking reference would let a PIN unblock itself. */
+    const uint8_t p2_puk[] = { 0x00u, 0x2Cu, 0x02u, PIN_REF_UNBLOCK,
+                               0x08u, '8',   '7',   '6',
+                               '5',   '4',   '3',   '2',
+                               '1' };
+    CHECK_HEX(send(p2_puk, (uint16_t)sizeof(p2_puk)),
+              SW_REFERENCE_DATA_NOT_FOUND);
+
+    /* A short value is a malformed command, not a failed attempt, so it must
+     * not cost a PUK try -- same ordering rule as VERIFY. */
+    CHECK_HEX(unblock("12"), SW_WRONG_LENGTH);
+    CHECK_HEX(query(PIN_REF_UNBLOCK), SW_NVM_CHANGED_PIN_TRIES(3));
+
+    /* Nothing above unblocked anything. */
+    CHECK_HEX(query(PIN_REF_USER), SW_AUTH_METHOD_BLOCKED);
+}
+
 TEST(the_puk_reference_exists_but_is_unset)
 {
     /* Reserved so the record layout and the EEPROM map do not have to change
@@ -530,6 +687,12 @@ int main(void)
     RUN(a_blocked_pin_cannot_be_changed);
     RUN(malformed_verify_is_refused_precisely);
     RUN(malformed_change_is_refused_precisely);
+    RUN(the_puk_unblocks_and_leaves_the_pin_value_alone);
+    RUN(the_puk_is_not_a_master_key);
+    RUN(a_wrong_puk_costs_a_puk_try);
+    RUN(unblocking_works_on_a_pin_that_is_not_blocked);
+    RUN(without_a_puk_a_blocked_pin_is_terminal);
+    RUN(reset_retry_is_refused_precisely);
     RUN(the_puk_reference_exists_but_is_unset);
     TEST_MAIN_END();
 }

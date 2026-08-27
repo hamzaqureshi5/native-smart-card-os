@@ -229,7 +229,7 @@ TEST(not_yet_implemented_ins_is_6d00)
      *   E0 / E4  -> M2b, covered by test_create.c
      *   C0       -> M2b, covered by test_get_response.c
      *   44 / 04  -> M2b, covered by test_lifecycle.c
-     *   20       -> M3,  covered by test_pin.c
+     *   20 / 24 / 2C -> M3, covered by test_pin.c
      *
      * Still absent: GET DATA.
      */
@@ -248,9 +248,8 @@ TEST(implemented_ins_is_never_6d00)
      * answers 6D00, and a list of what is ABSENT cannot detect that.
      */
     fresh();
-    const uint8_t ins[] = {
-        0xA4, 0xB0, 0xD6, 0xE0, 0xE4, 0xC0, 0x44, 0x04, 0x20
-    };
+    const uint8_t ins[] = { 0xA4, 0xB0, 0xD6, 0xE0, 0xE4, 0xC0,
+                            0x44, 0x04, 0x20, 0x24, 0x2C };
     for (unsigned i = 0; i < sizeof(ins); i++) {
         const uint8_t  cmd[] = { 0x00, ins[i], 0x00, 0x00 };
         const uint16_t sw    = send(cmd, sizeof(cmd), NULL);

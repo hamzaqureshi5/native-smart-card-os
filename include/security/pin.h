@@ -112,6 +112,28 @@ pin_status pin_set(uint8_t ref, const uint8_t *value, uint8_t len,
 pin_status pin_verify(uint8_t ref, const uint8_t *value, uint8_t len,
                       pin_info *out);
 
+/*
+ * Restore `ref`'s counter to its limit and its state to ACTIVE, leaving the
+ * salt and verifier untouched.
+ *
+ * A SEPARATE primitive from pin_set() and not a convenience wrapper around it:
+ * the stored PIN value is unknown to this card -- only its verifier is -- so
+ * there is nothing to re-derive a verifier from, and pin_set() must be given a
+ * value. Unblocking without changing the value is only possible because this
+ * function does not need one.
+ *
+ * NO AUTHORISATION IS CHECKED HERE. It is a primitive; the caller establishes
+ * entitlement. The only caller is scos_cmd_reset_retry(), which verifies the
+ * PUK first -- and calling this from anywhere else would be an unblock with no
+ * credential at all, which is worse than having no PUK.
+ *
+ * Refuses a reference that is UNSET (nothing to unblock) and TERMINATED-like
+ * states, but NOT one that is merely ACTIVE: restoring a counter that is
+ * already full is a harmless no-op and a reader whose response was lost must
+ * be able to repeat the command.
+ */
+pin_status pin_unblock(uint8_t ref);
+
 /* State without spending a try. This is what a VERIFY with an empty data
  * field answers, and it must not itself be usable as an oracle -- it reveals
  * only what the card would tell anyone. */

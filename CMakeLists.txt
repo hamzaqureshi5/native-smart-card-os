@@ -195,6 +195,7 @@ add_library(scos_core STATIC
   src/security/cmd_verify.c
   src/security/cmd_change_ref.c
   src/security/ac.c
+  src/security/cmd_reset_retry.c
 )
 target_include_directories(scos_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/include"

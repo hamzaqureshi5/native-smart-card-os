@@ -18,6 +18,7 @@ static const scos_cmd_entry k_commands[] = {
     { INS_DELETE_FILE, "DELETE FILE", scos_cmd_delete_file },
     { INS_VERIFY, "VERIFY", scos_cmd_verify },
     { INS_CHANGE_REF_DATA, "CHANGE REFERENCE DATA", scos_cmd_change_ref_data },
+    { INS_RESET_RETRY, "RESET RETRY COUNTER", scos_cmd_reset_retry },
     { INS_ACTIVATE_FILE, "ACTIVATE FILE", scos_cmd_activate_file },
     { INS_DEACTIVATE_FILE, "DEACTIVATE FILE", scos_cmd_deactivate_file },
 };
@@ -55,6 +56,8 @@ const char *scos_ins_name(uint8_t ins)
         return "GET DATA";
     case INS_CHANGE_REF_DATA:
         return "CHANGE REFERENCE DATA";
+    case INS_RESET_RETRY:
+        return "RESET RETRY COUNTER";
     case INS_CREATE_FILE:
         return "CREATE FILE";
     case INS_DELETE_FILE:

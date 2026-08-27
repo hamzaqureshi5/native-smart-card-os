@@ -64,9 +64,15 @@
 #define MBEDTLS_PLATFORM_NO_STD_FUNCTIONS
 
 /*
- * Smaller code at a small speed cost. On a 14 MHz core with a 32 KB ROM budget
- * that is the right trade for a hash that runs a handful of times per session;
- * the OS is 18 KB of 32 KB and the boot ROM is at 94% of its 8 KB.
+ * Smaller code at a small speed cost, which is the right trade for a hash that
+ * runs a handful of times per card session on a 14 MHz core.
+ *
+ * On the space: the OS links into 55 KB of OSFLASH and uses about 26 KB of it,
+ * so there is room. The 32 KB figure in SCOS_SIM_ROM_KB is a POLICY budget
+ * checked against libscos_core.a by the os_fits_in_rom test -- not a wall, and
+ * not the same measurement as the linked image. Worth keeping the primitives
+ * small anyway: the boot ROM next door is at 94% of its 8 KB, and M5's AES and
+ * ECC are still to come.
  */
 #define MBEDTLS_SHA256_SMALLER
 

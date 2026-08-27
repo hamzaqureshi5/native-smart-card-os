@@ -412,11 +412,52 @@ images wait on M5; a one-way fuse needs real silicon. Tracked in
   authentication -- otherwise one success followed by wrong guesses leaves the
   session authenticated while the counter runs down.
 
-* **blocked is TERMINAL on this card** -- a deliberate answer to the "PUK or
-  terminal?" question above, not an omission. `PIN_REF_UNBLOCK` exists and is
-  addressable so the record layout and the EEPROM map do not have to change,
-  but `RESET RETRY COUNTER` (INS 2C) is not implemented, so nothing can unblock
-  a blocked PIN. Next item in this milestone.
+* **`RESET RETRY COUNTER` (2C) with the PUK** :: DONE --
+  `src/security/cmd_reset_retry.c`.
+
+  This is the answer to the roadmap's "recoverable or terminal?" question:
+  **recoverable, through a separate credential, and the recovery path is itself
+  limited.** Blocked was terminal until this landed, which was better than a
+  fake recovery but made a mistyped PIN as bad as a lost card.
+
+  P1 = `02`, data = the PUK alone. The PIN's *value* is untouched and only its
+  counter is restored -- which is also what a cardholder wants, since someone
+  who mistyped their own PIN three times knows it perfectly well. It is also
+  the only thing possible: the card holds a verifier, not the PIN, so there is
+  nothing to re-derive a value from. Hence `pin_unblock()` as a primitive
+  separate from `pin_set()`.
+
+  **ISO's P1 = `00` form is refused with `6A86`, and the reason is a trade I
+  declined.** That form carries PUK followed by a new PIN in one data field, so
+  the card must know where to split. It *could* be made to work by storing the
+  PUK's length when the PUK is set -- and that was the first implementation,
+  until the cost became clear: the stored length of a credential is information
+  about that credential, and it would tell anyone who could read NVM exactly
+  how long the PUK is, turning an unknown search space into a known one.
+  Declining costs a caller one extra command (`RESET RETRY COUNTER` then
+  `CHANGE REFERENCE DATA`); accepting would cost every card a permanent leak.
+
+  Three properties the tests pin down:
+
+  * **The PUK is not a master key.** A successful unblock leaves the session
+    *unauthenticated* for the PIN. Presenting the PUK proves entitlement to
+    reset the PIN, not knowledge of it -- and granting PIN authentication would
+    make the PUK open every PIN-protected file, a far larger privilege than a
+    cardholder is given it for, inherited by anyone who obtained the PUK from a
+    letter.
+  * **A wrong PUK costs a PUK try.** It goes through `pin_verify()`, which
+    spends before comparing, so this command is no more of a free oracle
+    against the PUK than `VERIFY` is against the PIN. Exhausting the PUK blocks
+    it, and then the card genuinely is terminal -- the intended end of a
+    limited recovery path rather than a failure of one.
+  * **P2 names the reference being unblocked, not the one being presented.**
+    The PUK is implied. Letting a caller nominate the unblocking reference
+    would let a PIN unblock itself.
+
+  A card issued with **no** PUK still has a terminal PIN, and answers `6A88` --
+  "the reference data this command needs is not there" -- rather than `6983`,
+  which would describe the PIN's state instead of the reason recovery is
+  impossible. That is a personalisation choice, made diagnosable.
 
 * **per-file access conditions enforced in the command path** :: DONE --
   `include/security/ac.h`, `src/security/ac.c`, and the four command handlers.
@@ -500,7 +541,6 @@ images wait on M5; a one-way fuse needs real silicon. Tracked in
   this by personalising before issuance behind a secure channel to a security
   domain, which is M7.
 
-* `RESET RETRY COUNTER` (2C) with the PUK :: TODO
 * license key :: TODO
 
 * **tests** :: `tests/unit/test_pin.c` (878 checks) and

@@ -43,6 +43,7 @@ const char *scos_ins_name(uint8_t ins);
 #define INS_UPDATE_BINARY   0xD6u
 #define INS_GET_DATA        0xCAu
 #define INS_CHANGE_REF_DATA 0x24u
+#define INS_RESET_RETRY     0x2Cu
 #define INS_CREATE_FILE     0xE0u
 #define INS_DELETE_FILE     0xE4u
 /* ISO/IEC 7816-9. Note the values are NOT adjacent and are easy to swap:
@@ -66,6 +67,8 @@ uint16_t scos_cmd_verify(scos_kernel *k, const apdu_command *cmd,
                          apdu_response *rsp);
 uint16_t scos_cmd_change_ref_data(scos_kernel *k, const apdu_command *cmd,
                                   apdu_response *rsp);
+uint16_t scos_cmd_reset_retry(scos_kernel *k, const apdu_command *cmd,
+                              apdu_response *rsp);
 uint16_t scos_cmd_activate_file(scos_kernel *k, const apdu_command *cmd,
                                 apdu_response *rsp);
 uint16_t scos_cmd_deactivate_file(scos_kernel *k, const apdu_command *cmd,
