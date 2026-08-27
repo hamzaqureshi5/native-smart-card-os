@@ -32,13 +32,21 @@
  * split is what lets a test client read stdout as a pure response stream.
  */
 #include "hal/hal.h"
+#include "os/scos_config.h"
 #include "hal/sim/vcard.h"
 
 #include <stdio.h>
 #include <string.h>
 
-/* Generous: 261 command bytes is 522 hex characters, plus whitespace. */
-#define LINE_MAX 2048
+/*
+ * A command APDU arrives as hex, so a line must hold twice the largest APDU
+ * plus whitespace and the newline. SCOS_APDU_CMD_MAX is 1033 with the current
+ * extended-length ceiling, which is 2066 hex characters -- past the 2048 this
+ * used to be. Derived from the constant rather than restated, so raising
+ * SCOS_APDU_EXT_DATA_MAX cannot silently make the largest legal command
+ * unsendable on the simulator.
+ */
+#define LINE_MAX ((SCOS_APDU_CMD_MAX * 2u) + 64u)
 
 static int hex_nibble(int ch)
 {
@@ -57,6 +65,20 @@ static int hex_nibble(int ch)
 /* Decode ASCII hex, ignoring whitespace and ':' separators.
  * Returns the byte count, or -1 on a bad character / odd digit count /
  * overflow of the destination. */
+/*
+ * Returns the number of bytes decoded, or one of:
+ *
+ *   HEX_ERR_SYNTAX    not hex, or an odd number of digits. A TRANSPORT fault.
+ *   HEX_ERR_TOO_LONG  well-formed hex, more bytes than the card can receive.
+ *                     A CARD-LEVEL fault -- see the caller.
+ *
+ * The two were the same value until extended length made the difference
+ * observable, and telling them apart is what lets an over-long command get a
+ * status word instead of silence.
+ */
+#define HEX_ERR_SYNTAX   (-1)
+#define HEX_ERR_TOO_LONG (-2)
+
 static long hex_decode(const char *in, uint8_t *out, uint32_t cap)
 {
     uint32_t n  = 0u;
@@ -69,20 +91,20 @@ static long hex_decode(const char *in, uint8_t *out, uint32_t cap)
         }
         const int v = hex_nibble((unsigned char)ch);
         if (v < 0) {
-            return -1;
+            return HEX_ERR_SYNTAX;
         }
         if (hi < 0) {
             hi = v;
         } else {
             if (n >= cap) {
-                return -1; /* would overflow: reject, never truncate */
+                return HEX_ERR_TOO_LONG;
             }
             out[n++] = (uint8_t)((hi << 4) | v);
             hi       = -1;
         }
     }
     if (hi >= 0) {
-        return -1; /* odd number of hex digits */
+        return HEX_ERR_SYNTAX; /* odd number of hex digits */
     }
     return (long)n;
 }
@@ -195,7 +217,7 @@ hal_status hal_card_receive(uint8_t *buf, uint32_t cap, uint32_t *out_len)
         }
 
         const long n = hex_decode(line, buf, cap);
-        if (n < 0) {
+        if (n == HEX_ERR_SYNTAX) {
             /*
              * A malformed hex line is a TRANSPORT error, not a card error. On
              * real hardware the link layer would NAK it and the OS would never
@@ -204,7 +226,40 @@ hal_status hal_card_receive(uint8_t *buf, uint32_t cap, uint32_t *out_len)
              * teach the test client that garbage input produces 6700 from the
              * card. Report on stderr and wait for the next line.
              */
-            (void)fprintf(stderr, "transport: not valid hex (or too long)\n");
+            (void)fprintf(stderr, "transport: not valid hex\n");
+            (void)fflush(stderr);
+            continue;
+        }
+        if (n == HEX_ERR_TOO_LONG) {
+            /*
+             * A well-formed command longer than the card can receive. This is
+             * NOT a transport fault, and dropping it silently -- which is what
+             * this code did before extended length existed -- makes the card
+             * appear dead for a frame it should have answered.
+             *
+             * A real T=0 card sees the header first and answers from it: the
+             * reader sends CLA INS P1 P2 P3 and waits for a procedure byte, so
+             * the card can refuse before a single data byte moves. The model
+             * here is the same shape -- hand the OS the leading bytes that DID
+             * fit and let the parser reach its own verdict, which for any such
+             * frame is 6700 (LC_TOO_LARGE if the extended Lc is above the
+             * ceiling, BAD_LENGTH if the frame merely disagrees with its own
+             * length field).
+             *
+             * The card is never told the frame was truncated, because a real
+             * card is not told either. It answers from what it has.
+             */
+            (void)fprintf(stderr,
+                          "transport: command exceeds %u bytes; delivering "
+                          "the leading bytes so the card can answer\n",
+                          (unsigned)cap);
+            (void)fflush(stderr);
+            *out_len = cap;
+            return HAL_OK;
+        }
+        if (n < 0) {
+            /* Unreachable: hex_decode returns only the two errors above. */
+            (void)fprintf(stderr, "transport: internal decode error\n");
             (void)fflush(stderr);
             continue;
         }

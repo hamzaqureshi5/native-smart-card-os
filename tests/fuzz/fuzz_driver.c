@@ -18,6 +18,8 @@
  */
 #include "fuzz_targets.h"
 
+#include "os/scos_config.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -158,6 +160,94 @@ static size_t gen_apdu_like(uint8_t *buf, size_t cap)
     return n;
 }
 
+/*
+ * Extended-form APDUs: header, a zero introducer, then a 16-bit big-endian
+ * length field.
+ *
+ * gen_apdu_like above can never produce this shape -- it writes Lc as one byte
+ * at buf[4] -- so without a generator of its own the extended path gets only
+ * the handful of fixed corpus entries. That is not enough for a second
+ * untrusted-length parser.
+ *
+ * The declared length is drawn to land ON the interesting boundaries rather
+ * than uniformly, because a uniform draw over 0..65535 would essentially never
+ * hit the ceiling, the ceiling plus one, or a length that agrees with the
+ * frame -- and those are the only values where the code branches.
+ */
+static size_t gen_ext_apdu_like(uint8_t *buf, size_t cap)
+{
+    if (cap < 8u) {
+        return gen_random(buf, cap);
+    }
+    static const uint8_t inst[] = { 0xA4, 0xB0, 0xD6, 0xC0, 0xE0, 0xE4, 0xEE };
+
+    buf[0] = (rnd_below(4u) == 0u) ? (uint8_t)(rnd() & 0xFFu) : 0x00u;
+    buf[1] = inst[rnd_below((uint32_t)sizeof(inst))];
+    buf[2] = (uint8_t)(rnd() & 0xFFu);
+    buf[3] = (uint8_t)(rnd() & 0xFFu);
+    buf[4] = 0x00; /* the extended introducer */
+
+    /* The declared 16-bit length, biased onto the boundaries. */
+    uint32_t declared;
+    switch (rnd_below(8u)) {
+    case 0:
+        declared = 0u; /* not encodable as Lc; means 65536 as Le */
+        break;
+    case 1:
+        declared = 1u;
+        break;
+    case 2:
+        declared = SCOS_APDU_EXT_DATA_MAX; /* exactly the ceiling  */
+        break;
+    case 3:
+        declared = SCOS_APDU_EXT_DATA_MAX + 1u; /* one over        */
+        break;
+    case 4:
+        declared = 0xFFFFu; /* the ISO maximum      */
+        break;
+    case 5:
+        declared = rnd_below(SCOS_APDU_EXT_DATA_MAX + 4u);
+        break;
+    default:
+        declared = rnd_below(0x10000u);
+        break;
+    }
+    buf[5] = (uint8_t)(declared >> 8);
+    buf[6] = (uint8_t)(declared & 0xFFu);
+
+    size_t n = 7u;
+
+    /*
+     * How many body bytes actually follow. The disagreement between declared
+     * and actual is the bug class: a parser that trusts the declared length
+     * reads past the frame, and one that trusts the frame accepts a command it
+     * never validated.
+     */
+    uint32_t actual;
+    switch (rnd_below(5u)) {
+    case 0:
+        actual = declared; /* consistent -> a valid Case 3E   */
+        break;
+    case 1:
+        actual = declared + 2u; /* consistent -> a valid Case 4E   */
+        break;
+    case 2:
+        actual = (declared > 0u) ? declared - 1u : 0u;
+        break;
+    case 3:
+        actual = declared + 1u;
+        break;
+    default:
+        actual = rnd_below(64u);
+        break;
+    }
+
+    for (uint32_t i = 0; i < actual && n < cap; i++) {
+        buf[n++] = (uint8_t)(rnd() & 0xFFu);
+    }
+    return n;
+}
+
 /* Near-valid TLV, with one field corrupted. */
 static size_t gen_tlv_like(uint8_t *buf, size_t cap)
 {
@@ -279,7 +369,12 @@ static int hex_to_bytes(const char *hex, uint8_t *out, size_t cap, size_t *n)
     return 0;
 }
 
-#define BUF_MAX 600u
+/*
+ * Must exceed the largest APDU the card will accept, or the boundary itself is
+ * never fuzzed. SCOS_APDU_CMD_MAX is header + 3-byte Lc + data + 2-byte Le;
+ * the slack lets the driver hand over frames that are deliberately too long.
+ */
+#define BUF_MAX (SCOS_APDU_CMD_MAX + 64u)
 
 int main(int argc, char **argv)
 {
@@ -347,15 +442,52 @@ int main(int argc, char **argv)
     (void)target(buf, 262u); /* one byte too many    */
     corpus_run += 3u;
 
+    /*
+     * The maximum-length EXTENDED APDU, and the frames either side of it.
+     * Built, never typed: at 1033 bytes a hand-written hex string is not
+     * reviewable, and the three lengths here are exactly where an off-by-one
+     * in the ceiling check would show.
+     */
+    {
+        const uint32_t lc = SCOS_APDU_EXT_DATA_MAX;
+        buf[0]            = 0x00;
+        buf[1]            = 0xD6;
+        buf[2]            = 0x00;
+        buf[3]            = 0x00;
+        buf[4]            = 0x00;
+        buf[5]            = (uint8_t)(lc >> 8);
+        buf[6]            = (uint8_t)(lc & 0xFFu);
+        for (uint32_t i = 0; i < lc; i++) {
+            buf[7u + i] = (uint8_t)(i & 0xFFu);
+        }
+        (void)target(buf, 7u + lc); /* Case 3E at the ceiling  */
+        buf[7u + lc] = 0x00;
+        buf[8u + lc] = 0x00;
+        (void)target(buf, 9u + lc);      /* Case 4E at the ceiling  */
+        (void)target(buf, 7u + lc - 1u); /* one data byte short     */
+        (void)target(buf, 8u + lc);      /* neither 3E nor 4E       */
+
+        /* And a declared length one byte OVER the ceiling, which must be
+         * refused by the ceiling check rather than by running out of frame. */
+        const uint32_t over = SCOS_APDU_EXT_DATA_MAX + 1u;
+        buf[5]              = (uint8_t)(over >> 8);
+        buf[6]              = (uint8_t)(over & 0xFFu);
+        (void)target(buf, 7u + lc);
+        corpus_run += 5u;
+    }
+
     /* 2. Structured and random generation. */
     for (unsigned long it = 0; it < iterations; it++) {
         size_t n;
-        switch (it % 3ul) {
+        switch (it % 4ul) {
         case 0:
             n = gen_apdu_like(buf, sizeof(buf));
             break;
         case 1:
             n = gen_tlv_like(buf, sizeof(buf));
+            break;
+        case 2:
+            n = gen_ext_apdu_like(buf, sizeof(buf));
             break;
         default:
             n = gen_random(buf, sizeof(buf));

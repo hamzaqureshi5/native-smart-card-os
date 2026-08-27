@@ -73,7 +73,27 @@ uint16_t scos_cmd_get_response(scos_kernel *k, const apdu_command *cmd,
         return SW_CONDITIONS_NOT_SATISFIED;
     }
 
-    if (cmd->le > remaining) {
+    /*
+     * An EXTENDED Le on GET RESPONSE is refused rather than clamped.
+     *
+     * GET RESPONSE exists because T=0 cannot return data the reader did not
+     * ask for, and the card announces the waiting amount in SW2 of a 61XX --
+     * ONE byte, so never more than 256. A reader that can send an extended Le
+     * has therefore been told, at most, that 256 bytes are waiting; asking for
+     * 65536 of them is not a bigger request, it is a confused one.
+     *
+     * 6700 and not a clamp, because the exactness rule below is the whole
+     * contract of this command: the reader states a length and gets that
+     * length or a correction. Silently clamping an extended Le would be the
+     * one thing the 6CXX path exists to avoid.
+     */
+    if (cmd->extended) {
+        return SW_WRONG_LENGTH;
+    }
+
+    /* Comparison in uint32_t: cmd->le reaches 65536, remaining never exceeds
+     * 256, and a uint16_t comparison would have to narrow one of them. */
+    if (cmd->le > (uint32_t)remaining) {
         /*
          * The reader asked for more than exists. 6CXX tells it the exact right
          * length so the retry succeeds first time, and -- importantly -- does
@@ -88,11 +108,16 @@ uint16_t scos_cmd_get_response(scos_kernel *k, const apdu_command *cmd,
         return SW_WRONG_LE(remaining & 0xFFu);
     }
 
+    /* Past the two checks above, le <= remaining <= SCOS_PENDING_MAX, so the
+     * narrowing is provably safe. Stated as a local rather than cast inline so
+     * the reason sits next to the conversion. */
+    const uint16_t take = (uint16_t)cmd->le;
+
     /* Hand over exactly Le bytes from where the last collection stopped. */
-    if (!apdu_rsp_put(rsp, &k->pending[k->pending_pos], cmd->le)) {
+    if (!apdu_rsp_put(rsp, &k->pending[k->pending_pos], take)) {
         return SW_NO_PRECISE_DIAGNOSIS;
     }
-    k->pending_pos = (uint16_t)(k->pending_pos + cmd->le);
+    k->pending_pos = (uint16_t)(k->pending_pos + take);
 
     const uint16_t left = scos_pending_remaining(k);
     if (left == 0u) {

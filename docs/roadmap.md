@@ -94,11 +94,78 @@ and fuzz targets rather than being tacked onto a working milestone.
   information for a file it had not selected, and the reader's next READ BINARY
   would have acted on the previous one. Caught by an existing M1 test asserting
   the selection had moved.
-* extended APDUs -- parsing, buffers, and the 65535-byte bounds :: TODO.
-  Note the constraint already visible: `SCOS_PENDING_MAX` is 256 because that
-  is the most `61XX` can announce and the most a short Le can request. 65535
-  bytes does not fit in an 8 KB RAM budget, so extended-length support will
-  have to chain rather than buffer. Better to meet that here than on the chip.
+* **extended APDUs** :: DONE -- `src/apdu/apdu_parse.c`, and a documented
+  ceiling in `include/os/scos_config.h.in`.
+
+  The encoding is implemented in full: Case 2E/3E/4E, the three-byte length
+  field, and both zero-normalisations (`Le` of `0x00` means 256 in the short
+  form, `0x0000` means 65536 in the extended one). The five-byte boundary is
+  the one that matters and it has its own test: `00 A4 00 00 00` is a SHORT
+  Case 2 with `Le`=256, *not* the start of an extended APDU, because the
+  extended form needs three bytes of length field and there is one. That is
+  the project's own canonical first APDU, so misreading it would break the
+  command the card is asked most.
+
+  **The two directions are not symmetric, and treating them the same is the
+  mistake this design avoids.**
+
+  `Lc` costs RAM: the card must hold the whole data field before acting on it.
+  So `Lc` has a ceiling -- `SCOS_APDU_EXT_DATA_MAX`, 1 KB -- and above it the
+  parser returns `APDU_PARSE_LC_TOO_LARGE` and the card answers `6700`. Not
+  `6A81` "function not supported", because extended length *is* supported:
+  telling a reader otherwise would make it abandon the encoding instead of
+  sending a smaller `Lc`. 1 KB rather than 255 because a ceiling at 255 would
+  make the extended encoding carry nothing the short form cannot -- a feature
+  that ticks a conformance box without making the card better.
+
+  `Le` costs nothing: it is a MAXIMUM, and ISO permits returning fewer bytes.
+  So an extended `Le` of 65536 is honoured as written and the card answers
+  with what it has. No ceiling, no refusal, no buffer.
+
+  That asymmetry produced the one genuinely subtle rule here. `READ BINARY`
+  can now return fewer bytes than `Le` for two different reasons, and a reader
+  that cannot tell them apart cannot behave correctly:
+
+  | | meaning | what the reader should do |
+  |---|---|---|
+  | `6282` | the **file** ended | stop; there is nothing further |
+  | `9000` | the **card** clamped | read again from `offset + received` |
+
+  Collapsing them into one answer is wrong in both directions: `6282` after a
+  clamp reports a file as shorter than it is, and `9000` at real end-of-file
+  sends a reader round a loop that never terminates.
+
+  **Still not 65535, and it never will be by buffering.** As
+  [hardware-port.md](hardware-port.md) records, a real SIM part has 5 KB of
+  RAM shared with the stack; 65535 bytes is not a tight fit there, it is
+  impossible, and raising `SCOS_SIM_RAM_KB` would not change it. The only
+  mechanism that ever reaches the ISO maximum is command chaining (CLA bit
+  b5), which sends a large field as several short APDUs and needs no large
+  buffer at all. `apdu_check_cla()` already reports `6884` for the chaining
+  bit, so the refusal is precise rather than a blanket `6E00`.
+
+  Two supporting changes worth recording, because neither is where anyone
+  would look for extended-length work:
+
+  * `READ BINARY` reads through a 64-byte stack buffer in a loop instead of
+    one buffer sized for the ceiling. Stack is the one kind of RAM the project
+    does **not** account for -- `_Static_assert` measures
+    `sizeof(scos_kernel)` -- so a 1 KB local would have been invisible to the
+    budget it blows.
+  * the simulator transport used to DROP a command longer than the receive
+    buffer, printing to stderr and answering nothing, which is
+    indistinguishable from a dead card. It now hands the OS the leading bytes
+    that did fit and lets the parser reach its own verdict, which is the shape
+    of a real T=0 exchange: the reader sends the header and the card can
+    refuse before a single data byte moves.
+
+  Cost: `sizeof(scos_kernel)` 796 -> 2336 bytes of the 8 KB budget, OS text
+  17,480 -> 17,780. Coverage: 90,368 assertions in `test_apdu_parse.c`
+  including an exhaustive sweep of every (declared Lc, frame length) pair,
+  9 end-to-end tests in `tests/python/test_extended_apdu.py` that move real
+  payloads of 600, 700 and 1024 bytes, and a new extended-form generator in
+  the fuzz driver -- `gen_apdu_like` writes `Lc` as one byte at `buf[4]` and
+  so could never produce this shape at all.
 * EF.ATR (`2F01`) :: TODO
 
 ---
@@ -255,7 +322,7 @@ rather than an accident.
 | Area | Standard / specification | What it covers | Status here |
 |---|---|---|---|
 | Card interface | **ISO/IEC 7816-3** | electrical interface, ATR, transmission protocols T=0/T=1 | ATR structure followed; **T=0/T=1 framing is NOT implemented** -- the simulator carries APDUs over a line protocol and the chip over a UART. See below. |
-| APDU & commands | **ISO/IEC 7816-4** | APDU structure, command/response pairs, file organisation, security environment | the backbone of the project. Cases 1-4, status words, MF/DF/EF, FCI/FCP templates, BER-TLV, SELECT / READ BINARY / UPDATE BINARY. Extended APDUs still open (M2b). |
+| APDU & commands | **ISO/IEC 7816-4** | APDU structure, command/response pairs, file organisation, security environment | the backbone of the project. Cases 1-4 short **and extended**, status words, MF/DF/EF, FCI/FCP templates, BER-TLV, SELECT / READ BINARY / UPDATE BINARY, GET RESPONSE / 61XX. Extended `Lc` is capped at 1 KB by a documented ceiling, not at 65535 -- see M2b. Command chaining, secure messaging and logical channels are refused with the specific status word for each (6884 / 6882 / 6881) rather than a blanket 6E00. |
 | Administrative commands | **ISO/IEC 7816-9** | CREATE FILE, DELETE FILE, ACTIVATE / DEACTIVATE, life cycle | CREATE FILE and DELETE FILE done (M2b), with one documented deviation: we do not select the newly created file. ACTIVATE/DEACTIVATE FILE not yet. |
 | Data objects | **ISO/IEC 7816-5 / -6** | application identifiers (AID), interindustry data elements | not implemented. SELECT by DF name (P1=04) returns 6A81 and is deferred to M7, where AIDs first mean something. |
 | Cryptographic data | **ISO/IEC 7816-15** | cryptographic information application, key and certificate objects | not started. Depends on M5. |

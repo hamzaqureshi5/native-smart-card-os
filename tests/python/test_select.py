@@ -174,12 +174,48 @@ class TestProtocolErrors(CardTestCase):
     def test_lc_longer_than_data(self):
         self.assertSW(self.card.send_apdu("00A40000FF3F00"), SW_WRONG_LENGTH)
 
-    def test_extended_apdu_refused_not_misparsed(self):
-        # 00 A4 00 00 | 00 00 02 | 3F 00  -- extended Lc encoding.
-        self.assertSW(
-            self.card.send_apdu("00A4000000000 23F00".replace(" ", "")),
-            SW_FUNC_NOT_SUPPORTED,
-        )
+    def test_extended_apdu_selects_the_mf(self):
+        # 00 A4 00 00 | 00 00 02 | 3F 00 -- a Case 3E SELECT of the MF.
+        # The same command the card is most often asked, in the extended
+        # encoding. Answers 610C: selection succeeded and 12 bytes of FCI are
+        # waiting, exactly as the short form does.
+        r = self.card.send_apdu("00A40000000002" + "3F00")
+        self.assertEqual(r.sw1, 0x61, f"expected 61XX, got {r.sw:04X}")
+        # And the FCI is collectable, which proves the extended frame did not
+        # merely parse but dispatched into a real handler.
+        fci = self.card.send_apdu(f"00C00000{r.sw2:02X}")
+        self.assertSW(fci, SW_OK)
+        self.assertEqual(len(fci.data), r.sw2)
+
+    def test_extended_five_byte_boundary_is_short_le(self):
+        # 00 A4 00 00 00 is FIVE bytes with a zero fifth byte. It is a short
+        # Case 2 with Le=256, NOT the start of an extended APDU -- the
+        # extended form needs three bytes of length field and there is one.
+        # Misreading it would break the project's canonical first APDU.
+        #
+        # The discriminating outcome is 9000 WITH data: Le is present, so the
+        # card returns the FCI in this same exchange and never needs a 61XX.
+        # Had the frame been taken for the start of an extended APDU it would
+        # have been 6700, and had the fifth byte been read as Lc it would have
+        # been 6700 as well -- so success with a non-empty body is the only
+        # answer consistent with a correct parse.
+        r = self.card.send_apdu("00A4000000")
+        self.assertSW(r, SW_OK)
+        self.assertGreater(len(r.data), 0, "Le was present; FCI expected")
+
+    def test_extended_six_bytes_is_wrong_length(self):
+        # A zero introducer with only two bytes after it. No legal APDU has
+        # this shape: 6700, and specifically not 6A81, because extended length
+        # IS supported -- telling a reader otherwise would make it abandon the
+        # encoding instead of fixing the frame.
+        self.assertSW(self.card.send_apdu("00A400000001"), SW_WRONG_LENGTH)
+
+    def test_extended_lc_above_ceiling_is_wrong_length(self):
+        # A well-formed extended header announcing 4096 data bytes, which is
+        # above the card's documented ceiling. The card must answer rather
+        # than hang or drop the frame.
+        apdu = "00D60000" + "00" + "1000" + ("AA" * 16)
+        self.assertSW(self.card.send_apdu(apdu), SW_WRONG_LENGTH)
 
     def test_maximum_length_apdu(self):
         # Lc=255 plus Le: 261 bytes, the largest short APDU. Must be handled,
