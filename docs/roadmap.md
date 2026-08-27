@@ -45,10 +45,25 @@ and fuzz targets rather than being tacked onto a working milestone.
   bounded, no recursion. `include/apdu/tlv.h`. Swept exhaustively over all
   16,777,216 three-byte inputs under ASan.
 * **fuzzing** :: DONE -- APDU parser, TLV parser, command dispatch, filesystem
-  descriptor images, boot loader. `tests/fuzz/`.
-* `CREATE FILE` (E0) from an FCP template; `DELETE FILE` (E4) :: TODO
-* refuse deleting a non-empty DF (safer than a recursive delete that cannot be
-  rolled back before M4) :: TODO
+  descriptor images, boot loader, and FCP create/delete sequences.
+  `tests/fuzz/`. The `fcp` target biases toward templates that PARSE, because
+  `fuzz_command` emits INS E0 but its random data never forms a valid FCP --
+  measured at 27% successful creates, so the mutating paths are genuinely
+  reached rather than assumed to be.
+* **`CREATE FILE` (E0) from an FCP template; `DELETE FILE` (E4)** :: DONE --
+  `src/filesystem/cmd_create.c`. Unknown FCP tags are REFUSED, not ignored:
+  tags 86 and 8C carry access conditions, so a card that ignored them would
+  create an unprotected file while answering 9000. One documented deviation
+  from ISO/IEC 7816-9: the new file is not selected.
+* **refuse deleting a non-empty DF** :: DONE -- a recursive delete cannot be
+  rolled back before M4, so a power cut part way through would leave orphaned
+  descriptors pointing at a reused parent slot.
+* **KNOWN LIMITATION**: `DELETE FILE` frees the descriptor slot but NOT the
+  EF's data bytes. `fs_store`'s data area is a bump allocator, so deleting
+  leaks space. Compaction needs atomic data movement, which needs M4. Asserted
+  in `test_create.c` so it cannot regress silently.
+* `ACTIVATE FILE` / `DEACTIVATE FILE` (44 / 04) :: TODO -- a file can be
+  *created* deactivated today, but not moved between states afterwards.
 * `GET RESPONSE` (C0) and `61XX`, so a Case 3 SELECT can return its FCI :: TODO
 * extended APDUs -- parsing, buffers, and the 65535-byte bounds :: TODO
 * EF.ATR (`2F01`) :: TODO
@@ -198,11 +213,54 @@ a stated reason, not because it exists.
 
 ---
 
+## Standards this project follows
+
+The normative references. Everything the OS does on the wire is supposed to
+come from one of these, and where it does not, that is a documented deviation
+rather than an accident.
+
+| Area | Standard / specification | What it covers | Status here |
+|---|---|---|---|
+| Card interface | **ISO/IEC 7816-3** | electrical interface, ATR, transmission protocols T=0/T=1 | ATR structure followed; **T=0/T=1 framing is NOT implemented** -- the simulator carries APDUs over a line protocol and the chip over a UART. See below. |
+| APDU & commands | **ISO/IEC 7816-4** | APDU structure, command/response pairs, file organisation, security environment | the backbone of the project. Cases 1-4, status words, MF/DF/EF, FCI/FCP templates, BER-TLV, SELECT / READ BINARY / UPDATE BINARY. Extended APDUs still open (M2b). |
+| Administrative commands | **ISO/IEC 7816-9** | CREATE FILE, DELETE FILE, ACTIVATE / DEACTIVATE, life cycle | CREATE FILE and DELETE FILE done (M2b), with one documented deviation: we do not select the newly created file. ACTIVATE/DEACTIVATE FILE not yet. |
+| Data objects | **ISO/IEC 7816-5 / -6** | application identifiers (AID), interindustry data elements | not implemented. SELECT by DF name (P1=04) returns 6A81 and is deferred to M7, where AIDs first mean something. |
+| Cryptographic data | **ISO/IEC 7816-15** | cryptographic information application, key and certificate objects | not started. Depends on M5. |
+| Multi-application OS | **GlobalPlatform Card Specification** | application load / install / delete, Security Domains, life cycle, SCP secure channels | not started. M7. **No compliance will be claimed** -- see the standing rule below. |
+| Secure application runtime | **Java Card** | the VM, API and applet model | deliberately NOT the first target. The native applet interface comes first (M6) so that isolation is understood before a VM is added. |
+| Security evaluation | **Common Criteria** | formal security evaluation and certification | out of scope for a software project. Relevant because it dictates what evidence a real product must produce -- which is why docs/threat-model.md names a test for every mitigation. |
+| Contactless | **ISO/IEC 14443** | proximity card communication | not implemented and not planned before hardware. It is a link layer; the HAL is where it would attach, and `hal_card_send/receive` already hides the difference. |
+| Banking | **EMV** | payment application and transaction requirements | **will not be implemented merely because it exists.** A payment applet is an application on top of a card OS, not part of one. |
+| SIM / UICC | **ETSI TS 102 221 / 223 / 225 / 226** | UICC architecture, APDUs, telecom security, OTA | not implemented. 102 221 is the most realistic first *application* profile for this OS, since it is ISO 7816-4 plus a defined file tree, and needs no new crypto. A candidate for M8. |
+| Authentication tokens | **FIDO**, GlobalPlatform configurations | secure-element authentication use cases | not started. Needs M5 (ECC) and M6 (applets) first. |
+
+### Two honest notes on the table above
+
+**ISO/IEC 7816-3 is only partly honoured, and that is the biggest gap.** The
+ATR we emit is structurally valid and documented byte by byte in
+docs/simulator.md, but there is no T=0 or T=1 state machine: no TPDU
+segmentation, no procedure bytes, no NAD/PCB/LEN framing, no block
+retransmission, no guard-time or waiting-time handling. Those live below
+`hal_card_send/receive` on purpose -- on a real card the interface block
+implements them in hardware -- but it means **no reader driver has ever spoken
+to this OS**, and a PC/SC reader would not work today. The first thing real
+hardware will test is exactly this layer.
+
+**"Follows" is not "complies with".** Reading a specification and implementing
+what it says is not the same as being verified against it, and neither is the
+same as certification. This project claims the first only. Where a deviation is
+deliberate it is stated at the point of the code -- for example CREATE FILE not
+selecting the created file, or SELECT's fixed and documented search order,
+which ISO leaves to the card.
+
 ## Standing rules
 
 * No invented protocol semantics. If it is not in the specification, it is not
   implemented.
-* No compliance claim without verification against the actual document.
+* No compliance claim without verification against the actual document. The
+  standards table above says "follows", never "complies with" -- and
+  GlobalPlatform work stays labelled "GlobalPlatform-inspired prototype" until
+  checked against the real specification.
 * Every threat-model mitigation names its test.
 * Nothing hardware-specific is written for hardware whose documentation has not
   been read.

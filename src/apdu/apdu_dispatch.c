@@ -13,6 +13,8 @@ static const scos_cmd_entry k_commands[] = {
     { INS_SELECT,        "SELECT",        scos_cmd_select        },
     { INS_READ_BINARY,   "READ BINARY",   scos_cmd_read_binary   },
     { INS_UPDATE_BINARY, "UPDATE BINARY", scos_cmd_update_binary },
+    { INS_CREATE_FILE,   "CREATE FILE",   scos_cmd_create_file   },
+    { INS_DELETE_FILE,   "DELETE FILE",   scos_cmd_delete_file   },
     /* M2b adds CREATE FILE / DELETE FILE / GET RESPONSE;
      * M3 adds VERIFY. */
 };

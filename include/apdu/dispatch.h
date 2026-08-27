@@ -49,6 +49,10 @@ const char *scos_ins_name(uint8_t ins);
 /* --- handlers ----------------------------------------------------------- */
 uint16_t scos_cmd_select(scos_kernel *k, const apdu_command *cmd,
                          apdu_response *rsp);
+uint16_t scos_cmd_create_file(scos_kernel *k, const apdu_command *cmd,
+                             apdu_response *rsp);
+uint16_t scos_cmd_delete_file(scos_kernel *k, const apdu_command *cmd,
+                             apdu_response *rsp);
 uint16_t scos_cmd_read_binary(scos_kernel *k, const apdu_command *cmd,
                               apdu_response *rsp);
 uint16_t scos_cmd_update_binary(scos_kernel *k, const apdu_command *cmd,

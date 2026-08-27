@@ -604,3 +604,191 @@ fs_status fs_init(void)
      */
     return st;
 }
+
+/* ========================================================== create/delete == */
+
+/*
+ * Reserved identifiers.
+ *
+ * 3F00 is the MF by definition and there is exactly one. FFFF is reserved by
+ * ISO/IEC 7816-4 to mean "no file", so a file carrying it could never be
+ * unambiguously selected.
+ */
+static bool fid_is_reserved(uint16_t fid)
+{
+    return fid == FS_FID_MF || fid == 0xFFFFu;
+}
+
+fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
+                         uint16_t *out_index)
+{
+    if (sel == NULL || req == NULL) {
+        return FS_ERR_PARAM;
+    }
+
+    /* The parent must be a DF that is itself usable. Creating inside a
+     * deactivated or terminated DF would produce a file reachable only by
+     * reactivating its parent, which is a state nothing else in the OS
+     * expects. */
+    fs_descriptor parent;
+    fs_status     st = fs_store_read_desc(sel->cur_df, &parent);
+    if (st != FS_OK) {
+        return st;
+    }
+    if (!fs_is_df(&parent)) {
+        return FS_ERR_WRONG_TYPE;
+    }
+    if (!fs_is_usable(&parent)) {
+        return FS_ERR_NOT_USABLE;
+    }
+
+    if (fid_is_reserved(req->file_id)) {
+        return FS_ERR_EXISTS;
+    }
+
+    /* Type-specific validation. Done before ANY write, so a rejected request
+     * leaves the filesystem exactly as it was. */
+    switch (req->type) {
+    case FS_TYPE_DF:
+        if (req->size != 0u || req->sfi != FS_NO_SFI) {
+            return FS_ERR_PARAM;
+        }
+        break;
+    case FS_TYPE_EF_TRANSPARENT:
+        /* A zero-length EF is refused rather than created. ISO does not forbid
+         * it, but every read of it would be a short read of nothing and every
+         * write out of range, so it can do nothing except confuse a client. */
+        if (req->size == 0u || req->size > FS_MAX_EF_SIZE) {
+            return FS_ERR_PARAM;
+        }
+        if (req->sfi != FS_NO_SFI && (req->sfi < 1u || req->sfi > 30u)) {
+            return FS_ERR_PARAM;
+        }
+        break;
+    case FS_TYPE_MF:
+        /* There is exactly one MF and fs_personalise() made it. */
+        return FS_ERR_EXISTS;
+    case FS_TYPE_FREE:
+    default:
+        return FS_ERR_PARAM;
+    }
+
+    switch (req->lifecycle) {
+    case FS_LC_CREATION:
+    case FS_LC_INITIALISED:
+    case FS_LC_ACTIVATED:
+    case FS_LC_DEACTIVATED:
+        break;
+    case FS_LC_TERMINATED:
+        /* Creating something already dead is almost certainly a client bug,
+         * and it is irreversible, so refuse rather than honour it. */
+        return FS_ERR_PARAM;
+    default:
+        return FS_ERR_PARAM;
+    }
+
+    /* Collision checks against the siblings. */
+    uint16_t existing = FS_INVALID_INDEX;
+    if (fs_find_child(sel->cur_df, req->file_id, &existing) == FS_OK) {
+        return FS_ERR_EXISTS;
+    }
+    if (req->sfi != FS_NO_SFI &&
+        fs_find_by_sfi(sel->cur_df, req->sfi, &existing) == FS_OK) {
+        return FS_ERR_EXISTS;
+    }
+
+    const uint16_t slot = fs_store_find_free_slot();
+    if (slot == FS_INVALID_INDEX) {
+        return FS_ERR_NO_SPACE;
+    }
+
+    fs_descriptor d;
+    os_memset(&d, 0, sizeof(d));
+    d.file_id   = req->file_id;
+    d.type      = req->type;
+    d.lifecycle = req->lifecycle;
+    d.parent    = sel->cur_df;
+    d.size      = req->size;
+    d.sfi       = req->sfi;
+    d.ac_read   = req->ac_read;
+    d.ac_update = req->ac_update;
+    d.flags     = 0u;
+
+    if (req->type == FS_TYPE_EF_TRANSPARENT) {
+        uint32_t offset = 0u;
+        st = fs_store_alloc_data(req->size, &offset);
+        if (st != FS_OK) {
+            /* Out of data space. The descriptor slot was never written, so
+             * nothing needs undoing -- which is exactly why the allocation
+             * happens after every other check and before the only write. */
+            return st;
+        }
+        d.data_offset = offset;
+        /* Contents are left in the erased state (0xFF), the same as a
+         * factory-fresh EF. Not zeroed: zeroing would be a write of 0x00 over
+         * flash that has just been allocated, and on a real part that is a
+         * program cycle spent to make the file *less* like blank silicon. */
+    }
+
+    st = fs_store_write_desc(slot, &d);
+    if (st != FS_OK) {
+        return st;
+    }
+    if (out_index != NULL) {
+        *out_index = slot;
+    }
+    return FS_OK;
+}
+
+fs_status fs_delete_file(fs_selection *sel, uint16_t file_id)
+{
+    if (sel == NULL) {
+        return FS_ERR_PARAM;
+    }
+    if (file_id == FS_FID_MF) {
+        /* A card with no root cannot mount. Refusing here rather than in the
+         * command handler means no future caller can get it wrong either. */
+        return FS_ERR_NOT_USABLE;
+    }
+
+    uint16_t  index = FS_INVALID_INDEX;
+    fs_status st    = fs_find_child(sel->cur_df, file_id, &index);
+    if (st != FS_OK) {
+        return st;
+    }
+
+    fs_descriptor d;
+    st = fs_store_read_desc(index, &d);
+    if (st != FS_OK) {
+        return st;
+    }
+    if (d.type == FS_TYPE_MF) {
+        return FS_ERR_NOT_USABLE;
+    }
+    if (fs_is_df(&d) && fs_child_count(index) > 0u) {
+        /* Non-empty DF. See the comment in fs.h: a recursive delete cannot be
+         * rolled back before M4, and a power cut part way through would leave
+         * orphans pointing at a parent slot that gets reused. */
+        return FS_ERR_NOT_USABLE;
+    }
+
+    st = fs_store_free_desc(index);
+    if (st != FS_OK) {
+        return st;
+    }
+
+    /* Do not leave the selection pointing at a freed slot: the next command
+     * would act on whatever is written there next. */
+    if (sel->cur_ef == index) {
+        sel->cur_ef = FS_INVALID_INDEX;
+    }
+    if (sel->cur_df == index) {
+        /* Cannot happen today -- fs_find_child never returns the DF we are
+         * searching within -- but a future caller might delete the current DF
+         * from its parent. Falling back to the root is the only selection
+         * guaranteed to exist. */
+        sel->cur_df = fs_root_index();
+        sel->cur_ef = FS_INVALID_INDEX;
+    }
+    return FS_OK;
+}
