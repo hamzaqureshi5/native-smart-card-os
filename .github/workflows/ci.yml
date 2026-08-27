@@ -7,6 +7,9 @@
 #   arm      the same OS as real Cortex-M3 machine code, booted through the
 #            boot ROM on QEMU. This is where the memory map is enforced.
 #   format   clang-format, at a PINNED version.
+#   armv6m   the portable core compiled for Cortex-M0. Real SIM parts are not
+#            all ARMv7-M -- Samsung's S3M228A uses an ARM SecurCore SC000,
+#            which is ARMv6-M. See docs/hardware-port.md.
 #   samsung  the OS linked against the do-nothing Samsung stub. It proves the
 #            HAL surface is genuinely bounded -- if the core ever grows a
 #            dependency on something the stub does not provide, this fails to
@@ -96,6 +99,29 @@ jobs:
       # something rewritten for it.
       - name: Test on QEMU
         run: ctest --test-dir build-arm --output-on-failure
+
+  armv6m:
+    name: ARMv6-M portability (Cortex-M0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi
+
+      # Only to generate include/os/scos_config.h; nothing is built here.
+      - name: Generate the config header
+        run: cmake -S . -B build
+
+      # Compile-only, and deliberately so: there is no ARMv6-M board target,
+      # and faking one would be worse than an honest narrow check. What this
+      # proves is that the PORTABLE core contains no ARMv7-M-only construct.
+      # src/hal/arm-scv1/ is exempt -- a HAL is allowed to be architecture
+      # specific, and boot_main.c writes SCB->VTOR, which Cortex-M0 lacks.
+      - name: Compile the core for ARMv6-M
+        run: ./tools/check-armv6m.sh
 
   samsung-stub:
     name: HAL boundary (Samsung stub)
