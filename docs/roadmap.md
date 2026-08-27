@@ -418,11 +418,87 @@ images wait on M5; a one-way fuse needs real silicon. Tracked in
   but `RESET RETRY COUNTER` (INS 2C) is not implemented, so nothing can unblock
   a blocked PIN. Next item in this milestone.
 
-* per-file access conditions enforced in the command path :: TODO. This is what
-  closes the holes `fs.h` currently documents in as many words: `CREATE FILE`,
-  `DELETE FILE`, `ACTIVATE`/`DEACTIVATE FILE` are still unauthenticated, and
-  FCP tags 86 and 8C are *refused* by `cmd_create.c` rather than ignored
-  precisely so this can land honestly.
+* **per-file access conditions enforced in the command path** :: DONE --
+  `include/security/ac.h`, `src/security/ac.c`, and the four command handlers.
+
+  This is the item that closes the holes the source had been documenting in as
+  many words. `READ BINARY`, `UPDATE BINARY`, `CREATE FILE`, `DELETE FILE` and
+  `ACTIVATE`/`DEACTIVATE FILE` all consult a condition and answer `6982` when
+  the session is not entitled.
+
+  **FCP tag 86, not 8C, and the choice is the interesting part.** ISO offers
+  both: `8C` is the compact format, `86` is "proprietary". Implementing `8C`
+  means getting its access-mode bit positions exactly right, and this project
+  does not have the specification text to state them -- a card that accepted an
+  `8C` template while misreading which operation each bit protected would
+  create a file whose protection is not the protection requested, and answer
+  `9000` while doing it. So `8C` is refused with `6A81` ("valid tag,
+  unimplemented" -- **not** `6A80`, which would claim the template was
+  malformed) and `86` carries a format defined in `fs_types.h`. Using `86` is
+  not a workaround: ISO defines it as proprietary, so a card-specific format is
+  exactly what the tag is for.
+
+  ```
+  86 03 <read> <update> <admin>
+
+     0x00  ALWAYS    0x1N  PIN reference N verified this session    0xFF  NEVER
+  ```
+
+  `ac_admin` fits in a **reserved byte** of the existing 20-byte descriptor, so
+  the layout is unchanged and an older card reads it as `0` = ALWAYS, which is
+  the behaviour it had before conditions existed.
+
+  Four decisions where the obvious choice is wrong:
+
+  * **The default is ALWAYS, not NEVER.** A file created without an `86`
+    template is unprotected. NEVER would look safer and would make every such
+    file permanently unreachable *including by the caller that just made it* --
+    a card that refuses to read a file it was told nothing about is not more
+    secure, it is broken, and it pushes callers toward whatever incantation
+    makes the refusal stop. That is how a protection mechanism gets routed
+    around.
+  * **CREATE is gated on the parent DF; DELETE on the file itself.** The
+    inconsistency is deliberate. Creating modifies the directory, so the
+    directory's condition applies -- and reading it from the template being
+    created would let a caller authorise its own request, which is not a check.
+    Deleting on the parent's condition would mean one condition governed the
+    destruction of everything inside a DF, so a file could be protected against
+    reading and unprotected against deletion. Destruction should be at least as
+    hard as reading.
+  * **A nonexistent file answers `6A82`, not `6982`.** Refusing on
+    authorisation grounds confirms the file exists, which is what an attacker
+    enumerating identifiers wants to learn. So the file is resolved first and
+    the check comes after.
+  * **An uninterpretable condition byte is refused at CREATE.** A stored value
+    the card cannot evaluate would have to be treated as NEVER -- the only safe
+    reading -- leaving the file permanently unreachable for a reason nothing
+    could explain. Refusing turns that into an immediate `6A80` with the
+    template still in the caller's hand. `scos_ac_permits()` also treats an
+    unknown byte as NEVER anyway, because "should be unreachable" is not a
+    security property.
+
+  **A bug this found, worth recording.** `ac_admin` was added to the descriptor
+  and to the FCP parser, but `fs_create_file()` was not updated to copy it. The
+  result: reads and writes were protected correctly while admin protection was
+  silently dropped, so a caller could ask for a delete-protected file, receive
+  `9000`, and get a file anyone could delete. Precisely the failure the
+  refuse-what-you-do-not-understand rule exists to prevent, reintroduced by
+  adding a struct field without its copy. Caught by
+  `tests/python/test_access_conditions.py`, not by review, and now guarded by a
+  three-distinct-values round-trip test in `test_create.c`.
+
+  Also fixed while here: `fs_store.c` wrote the two reserved bytes as one
+  `put_u16(&raw[16], 0)` *after* `ac_admin` was assigned to byte 16, which
+  zeroed it. Every file would have read as ALWAYS and every condition in the
+  card would have been unenforced, while every test that only exercised the
+  ALWAYS case still passed.
+
+  **Still unauthenticated on a factory card**, and this is a real residual
+  hole rather than an oversight: the MF ships with `ac_admin = ALWAYS`, because
+  a card whose root cannot be written has no way to receive its first file. So
+  anyone reaching a factory card can create files in the MF. Real cards close
+  this by personalising before issuance behind a secure channel to a security
+  domain, which is M7.
 
 * `RESET RETRY COUNTER` (2C) with the PUK :: TODO
 * license key :: TODO

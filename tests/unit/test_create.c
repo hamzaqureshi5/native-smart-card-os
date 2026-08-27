@@ -598,16 +598,62 @@ TEST(unknown_tags_are_refused_not_ignored)
     fresh();
     CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
 
-    const uint8_t with_8c[] = {
-        0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x15, 0x80,
-        0x02, 0x00, 0x10, 0x8C, 0x02, 0x01, 0xFF
-    }; /* 8C = access cond */
+    /*
+     * Tag 8C, ISO's COMPACT security-attribute format.
+     *
+     * Now answered 6A81 rather than 6A80, and the change of status word is the
+     * point rather than a relaxation. 6A80 says "your data field is bad"; 8C
+     * is a perfectly valid tag, so that was never true. 6A81 says the card
+     * understands the tag and does not implement it, which is exactly the
+     * situation -- and it tells a caller to use tag 86 instead of hunting for
+     * an error in a template that has none.
+     *
+     * Still refused, and refusing is still the whole point: 8C's access-mode
+     * byte assigns bits to operations, this project does not have the
+     * specification text to state those positions, and a card that accepted
+     * the template while misreading them would create a file whose protection
+     * is not the protection that was asked for -- and answer 9000 while doing
+     * it.
+     */
+    const uint8_t with_8c[] = { 0x82, 0x01, 0x01, 0x83, 0x02, 0x28, 0x15, 0x80,
+                                0x02, 0x00, 0x10, 0x8C, 0x02, 0x01, 0xFF };
     CHECK_HEX(send_create_fcp(with_8c, (uint8_t)sizeof(with_8c)),
-              SW_WRONG_DATA);
+              SW_FUNC_NOT_SUPPORTED);
     /* And nothing was created, so the client cannot end up with an
      * unprotected file it believes is protected. */
     const uint16_t sw = select_fid(0x02u, 0x2815u);
     CHECK_HEX(sw, SW_FILE_NOT_FOUND);
+}
+
+TEST(all_three_access_conditions_round_trip)
+{
+    /*
+     * A field-by-field guard, added because ac_admin was once dropped between
+     * the template and NVM while ac_read and ac_update were copied correctly.
+     * The symptom was a file that answered 9000 to "protect this against
+     * deletion" and could then be deleted by anyone -- the exact failure the
+     * refuse-what-you-do-not-understand rule exists to prevent, reintroduced
+     * by adding a struct field without its copy.
+     *
+     * Three distinct values, so a copy that assigns the wrong source field is
+     * caught as well as one that assigns nothing.
+     */
+    fresh();
+    CHECK_HEX(select_fid(0x00u, 0x3F00u), SW_OK);
+
+    const uint8_t tmpl[] = { 0x82, 0x01,         0x01,         0x83,
+                             0x02, 0x29,         0x01,         0x80,
+                             0x02, 0x00,         0x10,         0x86,
+                             0x03, FS_AC_ALWAYS, FS_AC_PIN(1), FS_AC_NEVER };
+    CHECK_HEX(send_create_fcp(tmpl, (uint8_t)sizeof(tmpl)), SW_OK);
+
+    uint16_t idx = FS_INVALID_INDEX;
+    CHECK_EQ(fs_find_child(fs_root_index(), 0x2901u, &idx), FS_OK);
+    fs_descriptor d;
+    CHECK_EQ(fs_get(idx, &d), FS_OK);
+    CHECK_HEX(d.ac_read, FS_AC_ALWAYS);
+    CHECK_HEX(d.ac_update, FS_AC_PIN(1));
+    CHECK_HEX(d.ac_admin, FS_AC_NEVER);
 }
 
 TEST(unsupported_iso_file_types_say_so)
@@ -756,6 +802,7 @@ int main(void)
     RUN(delete_of_a_missing_file_is_reported);
     RUN(malformed_templates_are_refused);
     RUN(unknown_tags_are_refused_not_ignored);
+    RUN(all_three_access_conditions_round_trip);
     RUN(unsupported_iso_file_types_say_so);
     RUN(type_and_size_must_agree);
     RUN(a_bare_fcp_without_the_62_wrapper_also_works);

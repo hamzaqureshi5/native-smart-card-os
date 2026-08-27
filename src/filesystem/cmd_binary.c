@@ -27,6 +27,7 @@
 #include "apdu/dispatch.h"
 #include "apdu/sw.h"
 #include "filesystem/fs.h"
+#include "security/ac.h"
 #include "os/scos_config.h"
 #include "os/os_mem.h"
 
@@ -101,6 +102,29 @@ uint16_t scos_cmd_read_binary(scos_kernel *k, const apdu_command *cmd,
     const uint16_t rsw = resolve_target(k, cmd->p1, cmd->p2, &index, &offset);
     if (rsw != SW_OK) {
         return rsw;
+    }
+
+    /*
+     * The access check, and its position is deliberate: AFTER the file is
+     * resolved and BEFORE a single byte is read.
+     *
+     * After, because a check needs to know which file it is protecting -- and
+     * the answer for a file that does not exist is 6A82, not 6982; reporting
+     * "not authorised" for a nonexistent file tells an attacker the file is
+     * there.
+     *
+     * Before, because the only useful moment to refuse a read is before the
+     * data leaves NVM.
+     */
+    {
+        fs_descriptor   d;
+        const fs_status gst = fs_get(index, &d);
+        if (gst != FS_OK) {
+            return scos_fs_error_to_sw(gst);
+        }
+        if (!scos_ac_permits(k->auth, &d, AC_OP_READ)) {
+            return SW_SECURITY_NOT_SATISFIED; /* 6982 */
+        }
     }
 
     /*
@@ -218,15 +242,17 @@ uint16_t scos_cmd_update_binary(scos_kernel *k, const apdu_command *cmd,
         return rsw;
     }
 
-    /*
-     * ACCESS CONTROL IS NOT YET ENFORCED.
-     *
-     * Any reader that can reach this command can write any file. The
-     * descriptor already carries ac_read/ac_update, and M3 enforces them here
-     * and in READ BINARY. Until then this card protects nothing, which is
-     * stated plainly in docs/filesystem.md and docs/threat-model.md rather
-     * than left for someone to discover.
-     */
+    /* The write condition, checked before anything reaches NVM. */
+    {
+        fs_descriptor   d;
+        const fs_status gst = fs_get(index, &d);
+        if (gst != FS_OK) {
+            return scos_fs_error_to_sw(gst);
+        }
+        if (!scos_ac_permits(k->auth, &d, AC_OP_UPDATE)) {
+            return SW_SECURITY_NOT_SATISFIED; /* 6982 */
+        }
+    }
 
     /* fs_ef_write() refuses a partial write outright: without transactions
      * there is no way to undo half of one. */

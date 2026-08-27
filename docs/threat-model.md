@@ -269,6 +269,41 @@ every reset, so a damaged image stays in the loader rather than faulting; and
 the loader refuses to program unerased flash, so it cannot be tricked into
 writing the AND of two images.
 
+## T16 -- Unauthorized file access
+
+**Attacker:** anyone who can reach the card with a reader.
+
+**Mitigated as of M3.** Every file carries three access-condition bytes
+(read / update / admin) and the five commands that touch files check them,
+answering `6982` when the session is not entitled. A condition of `0x1N`
+requires PIN reference N to have been verified **in this session**, and the
+authentication state is volatile -- so removing power revokes it.
+
+**Two residual holes, both real.**
+
+*A factory card has no protection on its root.* The MF ships with
+`ac_admin = ALWAYS`, because a card whose root cannot be written has no way to
+receive its first file. Anyone who reaches a card before it is personalised can
+create files in the MF, and can therefore create an unprotected file. Real
+cards close this by personalising before issuance behind a secure channel to a
+security domain -- M7. Until then, an unpersonalised card should be treated as
+untrusted.
+
+*Conditions are set at creation and cannot be changed afterwards.* There is no
+command to tighten or loosen an existing file's conditions, so a file created
+permissively stays permissive. That is safer than the alternative would have
+been -- a `CHANGE SECURITY ATTRIBUTES` command is itself an administrative
+operation needing its own gate, and getting that wrong would be a way to
+unlock every file on the card -- but it means the only route to a correctly
+protected file is to create it that way.
+
+**Not mitigated at all:** anything below the command interface. An attacker who
+can read or write EEPROM directly bypasses all of this, because the conditions
+are bytes in the same EEPROM. That is the chip's memory protection's job and
+this project models no chip.
+
+---
+
 ## T13 -- PIN recovered from NVM
 
 **Attacker:** anyone who can read the card's EEPROM -- through a debug

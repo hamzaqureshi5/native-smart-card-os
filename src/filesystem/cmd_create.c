@@ -37,6 +37,7 @@
 #include "apdu/sw.h"
 #include "apdu/tlv.h"
 #include "filesystem/fs.h"
+#include "security/ac.h"
 #include "os/os_mem.h"
 
 /* --- FCP tags we accept (ISO/IEC 7816-4 table 12) ------------------------- */
@@ -46,6 +47,8 @@
 #define TAG_DATA_BYTES   0x80u /* number of data bytes, EF only              */
 #define TAG_LIFE_CYCLE   0x8Au /* life cycle status byte                     */
 #define TAG_SFI          0x88u /* short EF identifier                        */
+#define TAG_SEC_PROP     0x86u /* security attributes, PROPRIETARY format     */
+#define TAG_SEC_COMPACT  0x8Cu /* security attributes, ISO compact format     */
 
 /* --- file descriptor byte fields (ISO/IEC 7816-4 s.5.3.3) ----------------- */
 #define FDB_RFU_BIT      0x80u /* b8, must be 0                              */
@@ -117,9 +120,32 @@ static uint16_t parse_fcp(const uint8_t *body, uint16_t body_len,
                           fs_descriptor *req)
 {
     os_memset(req, 0, sizeof(*req));
-    req->parent      = FS_NO_PARENT;
-    req->sfi         = FS_NO_SFI;
-    req->lifecycle   = FS_LC_ACTIVATED; /* default if tag 8A is absent */
+    req->parent    = FS_NO_PARENT;
+    req->sfi       = FS_NO_SFI;
+    req->lifecycle = FS_LC_ACTIVATED; /* default if tag 8A is absent */
+
+    /*
+     * Default access conditions when tag 86 is absent: ALWAYS.
+     *
+     * This is the permissive default and it deserves saying out loud. A file
+     * created without a security attribute is unprotected, which is what every
+     * file on this card was before access conditions existed -- so the default
+     * preserves existing behaviour rather than silently locking out callers
+     * that never asked for protection.
+     *
+     * The safer-looking default, NEVER, would make every file created without
+     * an 86 template permanently unreachable, including by the caller that
+     * just made it. A card that refuses to read a file it was told nothing
+     * about is not more secure, it is broken -- and it would push callers
+     * toward whatever incantation made the refusal stop, which is how a
+     * protection mechanism gets routed around.
+     *
+     * The honest mitigation is that an issuer sets conditions explicitly, and
+     * that the ones on the factory files are set in fs_personalise().
+     */
+    req->ac_read     = FS_AC_ALWAYS;
+    req->ac_update   = FS_AC_ALWAYS;
+    req->ac_admin    = FS_AC_ALWAYS;
     req->data_offset = 0u;
 
     /*
@@ -255,10 +281,60 @@ static uint16_t parse_fcp(const uint8_t *body, uint16_t body_len,
             }
             break;
 
+        case TAG_SEC_PROP:
+            /*
+             * Security attributes, proprietary format -- and the format is
+             * ours, which is exactly what ISO reserves tag 86 for. Three
+             * bytes: read, update, admin. See the FS_AC_* block in
+             * include/filesystem/fs_types.h for the encoding and for why this
+             * tag rather than 8C.
+             *
+             * Exactly three, not "up to three": a two-byte value would leave
+             * ac_admin at its permissive default while looking like it had
+             * been configured, which is the kind of near-miss that produces an
+             * unprotected file and a satisfied caller.
+             */
+            if (obj.length != 3u) {
+                return SW_WRONG_DATA;
+            }
+            /*
+             * Every byte must be one this card can evaluate, checked BEFORE it
+             * reaches NVM. A stored condition the card could not interpret
+             * would have to be treated as NEVER -- the only safe reading --
+             * and the file would be permanently unreachable for a reason
+             * nothing could explain. Refusing at creation turns that into an
+             * immediate 6A80 with the template in front of the caller.
+             */
+            for (unsigned b = 0; b < 3u; b++) {
+                if (!fs_ac_is_known(obj.value[b])) {
+                    return SW_WRONG_DATA;
+                }
+            }
+            req->ac_read   = obj.value[0];
+            req->ac_update = obj.value[1];
+            req->ac_admin  = obj.value[2];
+            break;
+
+        case TAG_SEC_COMPACT:
+            /*
+             * ISO's compact format. NOT implemented, and refused with 6A81
+             * "function not supported" rather than approximated.
+             *
+             * Its access-mode byte assigns specific bits to specific
+             * operations, and this project does not have the specification
+             * text to state those positions precisely. A card that accepted an
+             * 8C template while misreading which operation each bit protected
+             * would create a file whose protection is not the protection that
+             * was requested -- and would answer 9000 while doing it. 6A81 is
+             * the truthful answer: the card understands the tag and does not
+             * implement it. Use tag 86.
+             */
+            return SW_FUNC_NOT_SUPPORTED;
+
         default:
-            /* See the header comment. Tags 86 and 8C carry access conditions;
-             * accepting a file whose protection we silently dropped would be
-             * worse than refusing to create it. */
+            /* Unknown tags are REFUSED, not ignored. A file created from a
+             * template the card only partly understood is a file whose
+             * properties are not the ones that were asked for. */
             return SW_WRONG_DATA;
         }
     }
@@ -314,6 +390,26 @@ uint16_t scos_cmd_create_file(scos_kernel *k, const apdu_command *cmd,
         return sw;
     }
 
+    /*
+     * CREATE is gated on the PARENT DF's admin condition, not on anything in
+     * the template being created.
+     *
+     * Creating a file modifies the directory, so the directory is the thing
+     * whose protection applies -- and it is the only file that exists at this
+     * point to have a condition. Reading it from the template instead would let
+     * a caller authorise its own request, which is not a check.
+     */
+    {
+        fs_descriptor   parent;
+        const fs_status gst = fs_get(k->sel.cur_df, &parent);
+        if (gst != FS_OK) {
+            return scos_fs_error_to_sw(gst);
+        }
+        if (!scos_ac_permits(k->auth, &parent, AC_OP_ADMIN)) {
+            return SW_SECURITY_NOT_SATISFIED; /* 6982 */
+        }
+    }
+
     uint16_t        index = FS_INVALID_INDEX;
     const fs_status st    = fs_create_file(&k->sel, &req, &index);
     if (st != FS_OK) {
@@ -363,6 +459,49 @@ uint16_t scos_cmd_delete_file(scos_kernel *k, const apdu_command *cmd,
     }
     const uint16_t fid =
         (uint16_t)(((uint16_t)cmd->data[0] << 8) | cmd->data[1]);
+
+    /*
+     * DELETE is gated on the admin condition of the file being DESTROYED, not
+     * of its parent.
+     *
+     * The parent would be the consistent choice with CREATE, and it is the
+     * wrong one here: it would mean a single condition on a DF governed the
+     * destruction of every file inside it, so a file could be protected
+     * against being read and unprotected against being deleted. Destruction
+     * should be at least as hard as reading.
+     *
+     * The file must be resolved before the check, and resolving it is also how
+     * a nonexistent identifier answers 6A82 rather than 6982 -- refusing on
+     * authorisation grounds would confirm the file exists.
+     */
+    {
+        uint16_t        target = FS_INVALID_INDEX;
+        const fs_status fst    = fs_find_child(k->sel.cur_df, fid, &target);
+        /*
+         * If the identifier does not name a child, FALL THROUGH to
+         * fs_delete_file() rather than reporting the lookup failure here.
+         *
+         * It already knows why: the MF is refused as "not usable" because a
+         * card with no root is a brick, and that is a better answer than the
+         * 6A82 this lookup would produce -- the MF is not a child of itself,
+         * so "not found" is technically true and diagnostically useless. The
+         * first version of this check returned 6A82 for DELETE 3F00 and an
+         * existing test caught it.
+         *
+         * Duplicating the existence rules here would also mean two places that
+         * can disagree about what exists.
+         */
+        if (fst == FS_OK) {
+            fs_descriptor   d;
+            const fs_status gst = fs_get(target, &d);
+            if (gst != FS_OK) {
+                return scos_fs_error_to_sw(gst);
+            }
+            if (!scos_ac_permits(k->auth, &d, AC_OP_ADMIN)) {
+                return SW_SECURITY_NOT_SATISFIED; /* 6982 */
+            }
+        }
+    }
 
     const fs_status st = fs_delete_file(&k->sel, fid);
     if (st != FS_OK) {

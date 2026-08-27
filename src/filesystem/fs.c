@@ -864,8 +864,20 @@ fs_status fs_create_file(const fs_selection *sel, const fs_descriptor *req,
     d.parent    = sel->cur_df;
     d.size      = req->size;
     d.sfi       = req->sfi;
+    /*
+     * All THREE access conditions. ac_admin was missing here when it was first
+     * added to the descriptor, and the consequence is worth recording: reads
+     * and writes were protected correctly while admin protection was silently
+     * dropped, so a caller could ask for a delete-protected file, receive
+     * 9000, and get a file anyone could delete. Exactly the failure the "refuse
+     * what you do not understand" rule in cmd_create.c exists to prevent,
+     * reintroduced by adding a field without its copy.
+     *
+     * Caught by tests/python/test_access_conditions.py, not by review.
+     */
     d.ac_read   = req->ac_read;
     d.ac_update = req->ac_update;
+    d.ac_admin  = req->ac_admin;
     d.flags     = 0u;
 
     if (req->type == FS_TYPE_EF_TRANSPARENT) {

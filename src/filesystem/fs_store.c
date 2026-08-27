@@ -31,7 +31,12 @@
  *   13  1   ac_update       (M3)
  *   14  1   sfi             (short EF identifier, 0 = none)
  *   15  1   flags
- *   16  2   reserved (0)
+ *   16  1   ac_admin        (M3) -- was reserved, so an older card reads it as
+ *                           0 = FS_AC_ALWAYS, which is the behaviour it had
+ *                           before access conditions existed. Compatible by
+ *                           accident of the earlier layout, not by luck: the
+ *                           reserved bytes were put there for this.
+ *   17  1   reserved (0)
  *   18  2   CRC-16 over bytes 0..17
  *
  * FLASH -- EF contents, bump-allocated upward from 0.
@@ -293,6 +298,7 @@ fs_status fs_store_read_desc(uint16_t index, fs_descriptor *out)
     out->data_offset = get_u32(&raw[8]);
     out->ac_read     = raw[12];
     out->ac_update   = raw[13];
+    out->ac_admin    = raw[16];
     out->sfi         = raw[14];
     out->flags       = raw[15];
 
@@ -336,7 +342,14 @@ fs_status fs_store_write_desc(uint16_t index, const fs_descriptor *desc)
     raw[13] = desc->ac_update;
     raw[14] = desc->sfi;
     raw[15] = desc->flags;
-    put_u16(&raw[16], 0u);
+    raw[16] = desc->ac_admin;
+    /* Byte 17 only. This used to be put_u16(&raw[16], 0) covering both
+     * reserved bytes, which now silently zeroes ac_admin -- every file would
+     * have read as FS_AC_ALWAYS and every access condition in the card would
+     * have been unenforced while every test that only checked the ALWAYS case
+     * still passed. Written in field order so the next field to claim byte 17
+     * cannot repeat it. */
+    raw[17] = 0u;
     put_u16(&raw[18], crc16(raw, 18u));
 
     const uint32_t off =

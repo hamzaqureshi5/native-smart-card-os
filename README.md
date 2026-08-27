@@ -37,9 +37,27 @@ replaced by a real secure MCU without rewriting the OS.
 ## Quick start
 
 ```sh
+# mbedTLS is a submodule. Without this the build stops with a message telling
+# you the same command, but a fresh clone needs it either way.
+git submodule update --init --depth 1 third_party/mbedtls
+
+tools/build.sh          # host and, if the cross toolchain is present, arm
+```
+
+Or by hand:
+
+```sh
 cmake -S . -B build
 cmake --build build -j
 ctest --test-dir build --output-on-failure
+```
+
+To put the OS on a (simulated) blank chip and talk to it:
+
+```sh
+tools/card load         # builds the ARM firmware if needed, then loads it
+tools/card apdu 00A40000023F00
+tools/card shell        # interactive
 ```
 
 Then talk to the card:

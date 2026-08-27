@@ -65,15 +65,28 @@ uint16_t fs_child_count(uint16_t parent);
 
 /* ---------------------------------------------------------- create/delete -- */
 /*
- * NO ACCESS CONTROL IS ENFORCED ON EITHER OF THESE YET.
+ * ACCESS CONTROL LIVES ABOVE THIS LAYER, AND THAT IS DELIBERATE.
  *
- * On a real card CREATE FILE and DELETE FILE are administrative commands
- * gated behind authentication -- a PIN, or more usually a secure channel to a
- * security domain. Here anyone holding the reader can create and delete files.
- * That is the same hole as the boot loader's, one layer up, and it is tracked
- * as "Unauthorized file access" in docs/threat-model.md against M3. Do not
- * read the checks below as a security boundary; they are structural integrity
- * checks, which is a different thing.
+ * As of M3, CREATE FILE, DELETE FILE and ACTIVATE / DEACTIVATE FILE ARE gated
+ * on the relevant file's ac_admin condition -- but the gate is in the command
+ * handlers (src/filesystem/cmd_create.c, cmd_lifecycle.c), not here.
+ *
+ * The reason is that a condition is evaluated against a SESSION, and fs.c
+ * knows nothing about sessions. Passing the authentication state down would
+ * put a security decision inside the layer whose job is storage, and make
+ * every future caller of fs_create_file() responsible for supplying it
+ * correctly -- including callers written by someone who did not know it
+ * mattered. See include/security/ac.h.
+ *
+ * So: the checks in THIS file are structural integrity checks, which is a
+ * different thing from a security boundary, and calling fs_create_file()
+ * directly bypasses access control by design. The only caller that should is
+ * fs_personalise().
+ *
+ * Still unauthenticated on a factory card: the MF ships with ac_admin =
+ * FS_AC_ALWAYS, because a card whose root cannot be written to has no way to
+ * receive its first file. An issuer tightens it. Tracked in
+ * docs/threat-model.md.
  */
 
 /*
@@ -143,8 +156,9 @@ fs_status fs_delete_file(fs_selection *sel, uint16_t file_id);
  * to send it again, and failing the retry would leave a correct reader unable
  * to finish a correct sequence.
  *
- * NO ACCESS CONTROL, exactly as for create and delete above. Anyone holding
- * the reader can deactivate any file. Tracked against M3.
+ * Access control is applied by the CALLER, exactly as for create and delete
+ * above: scos_cmd_activate_file()/scos_cmd_deactivate_file() check ac_admin
+ * before calling this. Calling it directly bypasses that, by design.
  */
 fs_status fs_set_lifecycle(uint16_t index, fs_lifecycle want);
 

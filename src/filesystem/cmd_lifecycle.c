@@ -38,13 +38,19 @@
  * read and written", and ancestors_usable(), which makes deactivating a DF
  * genuinely block its subtree instead of only itself.
  *
- * NO ACCESS CONTROL. On a real card these are administrative commands behind
- * authentication. Here anyone holding the reader can deactivate any file.
- * Tracked in docs/threat-model.md against M3.
+ * ACCESS CONTROL, as of M3: both commands check the target file's ac_admin
+ * condition and answer 6982 if the session is not entitled. A file created
+ * with `86 03 xx xx 11` can only be switched by a session that has verified
+ * PIN 1; `FF` in that byte means no path through the command interface at all.
+ *
+ * The default is FS_AC_ALWAYS for a file created without a security attribute,
+ * and for the factory files -- so an out-of-the-box card behaves as it did
+ * before, and an issuer tightens it. See include/security/ac.h.
  */
 #include "apdu/dispatch.h"
 #include "apdu/sw.h"
 #include "filesystem/fs.h"
+#include "security/ac.h"
 #include "os/kernel.h"
 
 /* Shared body. The two commands differ only in the target state, so they are
@@ -88,6 +94,23 @@ static uint16_t set_lifecycle(scos_kernel *k, const apdu_command *cmd,
     /* The current EF if there is one, else the current DF. */
     const uint16_t target =
         (k->sel.cur_ef != FS_INVALID_INDEX) ? k->sel.cur_ef : k->sel.cur_df;
+
+    /*
+     * The admin condition on the file being switched. Checked here rather than
+     * inside fs_set_lifecycle(), because fs.c does not know about sessions --
+     * and giving it the authentication state would put a security decision in
+     * the layer that is supposed to be pure storage.
+     */
+    {
+        fs_descriptor   d;
+        const fs_status gst = fs_get(target, &d);
+        if (gst != FS_OK) {
+            return scos_fs_error_to_sw(gst);
+        }
+        if (!scos_ac_permits(k->auth, &d, AC_OP_ADMIN)) {
+            return SW_SECURITY_NOT_SATISFIED; /* 6982 */
+        }
+    }
 
     const fs_status st = fs_set_lifecycle(target, want);
     if (st != FS_OK) {
