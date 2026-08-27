@@ -51,4 +51,9 @@ int scos_fuzz_command(const uint8_t *data, size_t size);
  * storage rather than a hostile reader. */
 int scos_fuzz_fs_image(const uint8_t *data, size_t size);
 
+/* The boot loader, driven as a SEQUENCE of length-prefixed commands so that
+ * ordering bugs are reachable. Asserts that an ACTIVE slot can never be a lie.
+ * Highest-value target in the set: this code ships in unpatchable mask ROM. */
+int scos_fuzz_boot(const uint8_t *data, size_t size);
+
 #endif /* SCOS_FUZZ_TARGETS_H */

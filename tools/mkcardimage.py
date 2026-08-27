@@ -8,17 +8,31 @@ already in place. This tool combines them into one flat image laid out exactly
 like the chip's address space, so a programmer (or QEMU's loader) can write it
 in a single pass:
 
-    offset 0x00000000  64 KB   CODE    <- smartcard-os.bin
-    offset 0x00010000  16 KB   EEPROM  <- card_eeprom.bin  (or erased)
-    offset 0x00014000 256 KB   DFLASH  <- card_flash.bin   (or erased)
+    offset 0x00000000   8 KB   BOOTROM <- scv1-boot.bin
+    offset 0x00002000  55 KB   OSFLASH <- smartcard-os.bin  (or erased)
+    offset 0x0000FC00   1 KB   OSHDR   <- card_oshdr.bin    (or erased)
+    offset 0x00010000  16 KB   EEPROM  <- card_eeprom.bin   (or erased)
+    offset 0x00014000 256 KB   DFLASH  <- card_flash.bin    (or erased)
                                total 336 KB
 
 Erased regions are filled with 0xFF, which is what real flash and EEPROM read
-as when blank -- so an image built with no filesystem produces a factory-blank
-card that personalises itself on first boot.
+as when blank -- so an image with only a boot ROM produces a genuinely BLANK
+card: it comes up in the loader, answers with the boot ROM's ATR, and waits for
+an OS. That is the state a part leaves the factory in.
 
-    tools/mkcardimage.py --code build-arm/smartcard-os.bin -o card.bin
-    tools/mkcardimage.py --code build-arm/smartcard-os.bin \
+Note that supplying --os alone is not enough to make a card boot: the boot ROM
+will not start an image with no valid ACTIVE slot header. Use
+`tools/mkldr.py slot` to produce card_oshdr.bin, or leave OSHDR erased and load
+the OS over APDUs.
+
+    # a blank card
+    tools/mkcardimage.py --bootrom build-arm/scv1-boot.bin -o blank.bin
+
+    # a fully programmed card
+    tools/mkldr.py slot build-arm/smartcard-os.bin -d slot/
+    tools/mkcardimage.py --bootrom build-arm/scv1-boot.bin \
+                         --os build-arm/smartcard-os.bin \
+                         --oshdr slot/card_oshdr.bin \
                          --eeprom mycard/card_eeprom.bin \
                          --dflash mycard/card_flash.bin -o card.bin
 
@@ -29,8 +43,10 @@ Inspect one:
 import argparse
 import sys
 
-# Must match src/hal/arm-scv1/scv1.h and scv1.ld.
-CODE_BASE, CODE_SIZE = 0x00000000, 64 * 1024
+# Must match src/hal/arm-scv1/scv1.h, scv1.ld and scv1_boot.ld.
+BOOTROM_BASE, BOOTROM_SIZE = 0x00000000, 8 * 1024
+OSFLASH_BASE, OSFLASH_SIZE = 0x00002000, 55 * 1024
+OSHDR_BASE, OSHDR_SIZE = 0x0000FC00, 1024
 EEPROM_BASE, EEPROM_SIZE = 0x00010000, 16 * 1024
 DFLASH_BASE, DFLASH_SIZE = 0x00014000, 256 * 1024
 IMAGE_SIZE = DFLASH_BASE + DFLASH_SIZE          # 0x54000 = 344064
@@ -58,7 +74,15 @@ def place(image: bytearray, base: int, size: int, path: str, what: str) -> None:
 def build(args) -> int:
     image = bytearray([ERASED]) * IMAGE_SIZE
     print(f"SCV1 card image, {IMAGE_SIZE} bytes ({IMAGE_SIZE // 1024} KB)")
-    place(image, CODE_BASE, CODE_SIZE, args.code, "CODE")
+    place(image, BOOTROM_BASE, BOOTROM_SIZE, args.bootrom, "BOOTROM")
+    if args.os:
+        place(image, OSFLASH_BASE, OSFLASH_SIZE, args.os, "OSFLASH")
+    else:
+        print(f"  {'OSFLASH':<7} 0x{OSFLASH_BASE:08X}  erased (0xFF) -- blank card")
+    if args.oshdr:
+        place(image, OSHDR_BASE, OSHDR_SIZE, args.oshdr, "OSHDR")
+    else:
+        print(f"  {'OSHDR':<7} 0x{OSHDR_BASE:08X}  erased (0xFF) -- no bootable slot")
     if args.eeprom:
         place(image, EEPROM_BASE, EEPROM_SIZE, args.eeprom, "EEPROM")
     else:
@@ -89,9 +113,18 @@ def inspect(path: str) -> int:
         print(f"  vector[1] reset PC   = 0x{pc:08X}", end="")
         print("  (Thumb)" if pc & 1 else "  (NOT Thumb -- suspicious)")
 
-    code = image[CODE_BASE:CODE_BASE + CODE_SIZE]
+    code = image[BOOTROM_BASE:BOOTROM_BASE + BOOTROM_SIZE]
     used = len(code.rstrip(bytes([ERASED])))
-    print(f"  CODE   {used} bytes used of {CODE_SIZE}")
+    print(f"  BOOTROM {used} bytes used of {BOOTROM_SIZE}")
+    hdr = image[OSHDR_BASE:OSHDR_BASE + 16]
+    if hdr[0:4] == FS_MAGIC:
+        length = int.from_bytes(hdr[6:10], "big")
+        state = int.from_bytes(hdr[14:16], "big")
+        name = {0x0000: "ACTIVE", 0xFFFF: "LOADED"}.get(state, f"?{state:04X}")
+        print(f"  OSHDR   slot {name}, image {length} bytes, "
+              f"CRC {int.from_bytes(hdr[10:12], 'big'):04X}")
+    else:
+        print("  OSHDR   no slot header -- the card will come up in the loader")
 
     if len(image) >= EEPROM_BASE + 16:
         sb = image[EEPROM_BASE:EEPROM_BASE + 16]
@@ -115,7 +148,9 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    ap.add_argument("--code", help="OS flash image (smartcard-os.bin)")
+    ap.add_argument("--bootrom", help="boot ROM image (scv1-boot.bin)")
+    ap.add_argument("--os", help="OS image (smartcard-os.bin)")
+    ap.add_argument("--oshdr", help="OS slot header (from tools/mkldr.py slot)")
     ap.add_argument("--eeprom", help="EEPROM image (card_eeprom.bin)")
     ap.add_argument("--dflash", help="data-flash image (card_flash.bin)")
     ap.add_argument("-o", "--output", default="card.bin")
@@ -124,8 +159,11 @@ def main() -> int:
 
     if args.inspect:
         return inspect(args.inspect)
-    if not args.code:
-        ap.error("--code is required (or use --inspect)")
+    if not args.bootrom:
+        ap.error("--bootrom is required (or use --inspect).\n"
+                 "A card image without a boot ROM has nothing at the reset "
+                 "vector; the core would read whatever is at address 0 as its "
+                 "stack pointer and fault immediately.")
     return build(args)
 
 

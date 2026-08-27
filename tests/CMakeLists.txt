@@ -14,7 +14,7 @@ if(CMAKE_CROSSCOMPILING)
                 -s "${CMAKE_CURRENT_SOURCE_DIR}/python" -p "test_*.py")
       set_tests_properties(python_integration_arm PROPERTIES
         ENVIRONMENT
-          "SCOS_TARGET=qemu;SCOS_QEMU=${SCOS_QEMU};SCOS_FIRMWARE=${CMAKE_BINARY_DIR}/smartcard-os.elf;PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/python"
+          "SCOS_TARGET=qemu;SCOS_QEMU=${SCOS_QEMU};SCOS_FIRMWARE=${CMAKE_BINARY_DIR}/scv1-boot.elf;SCOS_OS_IMAGE=${CMAKE_BINARY_DIR}/smartcard-os.bin;SCOS_MKLDR=${CMAKE_CURRENT_SOURCE_DIR}/../tools/mkldr.py;PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/python"
         TIMEOUT 600)
     endif()
   endif()
@@ -30,6 +30,15 @@ foreach(t test_apdu_parse test_os_mem test_tlv)
   target_include_directories(${t} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit")
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
+
+# The boot loader is equally HAL-free but belongs to libscos_boot, NOT the OS.
+# Linking it without scos_core is the point: the loader has to work on a chip
+# whose OS slot is empty, so if it ever grows a dependency on the OS this test
+# stops linking.
+add_executable(test_boot_loader unit/test_boot_loader.c)
+target_link_libraries(test_boot_loader PRIVATE scos_boot scos_warnings)
+target_include_directories(test_boot_loader PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit")
+add_test(NAME test_boot_loader COMMAND test_boot_loader)
 
 # These need NVM, so a HAL is linked in. The simulator HAL with state_dir=NULL
 # is an in-RAM hermetic store -- a test double that is also the real code path.
@@ -48,7 +57,7 @@ set(SCOS_SAN_OPTS
     "ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1"
     "UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
 
-foreach(t test_apdu_parse test_os_mem test_tlv)
+foreach(t test_apdu_parse test_os_mem test_tlv test_boot_loader)
   set_tests_properties(${t} PROPERTIES ENVIRONMENT "${SCOS_SAN_OPTS}")
 endforeach()
 if(SCOS_HAL STREQUAL "simulator")
@@ -69,15 +78,16 @@ if(SCOS_HAL STREQUAL "simulator")
     fuzz/fuzz_apdu.c
     fuzz/fuzz_tlv.c
     fuzz/fuzz_command.c
-    fuzz/fuzz_fs_image.c)
-  target_link_libraries(fuzz_driver PRIVATE scos_core scos_hal scos_warnings)
+    fuzz/fuzz_fs_image.c
+    fuzz/fuzz_boot.c)
+  target_link_libraries(fuzz_driver PRIVATE scos_core scos_hal scos_boot scos_warnings)
   target_include_directories(fuzz_driver PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fuzz")
   set_target_properties(fuzz_driver PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
   # Short runs in CI; the seed is fixed so a failure is reproducible.
   # For a longer hunt: ./fuzz_driver apdu 5000000 <seed>
-  foreach(tgt apdu tlv command fs_image)
+  foreach(tgt apdu tlv command fs_image boot)
     add_test(NAME fuzz_${tgt} COMMAND fuzz_driver ${tgt} 20000 1)
     set_tests_properties(fuzz_${tgt} PROPERTIES
       ENVIRONMENT "${SCOS_SAN_OPTS}" TIMEOUT 300)
