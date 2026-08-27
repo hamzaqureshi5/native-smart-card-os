@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: MIT
+#
+# Minimal CI: build and test the three configurations that matter.
+#
+#   native   the OS on x86 with AddressSanitizer + UBSan, and the layering
+#            tripwire. This is where memory bugs are caught.
+#   arm      the same OS as real Cortex-M3 machine code, booted through the
+#            boot ROM on QEMU. This is where the memory map is enforced.
+#   samsung  the OS linked against the do-nothing Samsung stub. It proves the
+#            HAL surface is genuinely bounded -- if the core ever grows a
+#            dependency on something the stub does not provide, this fails to
+#            link. That is the project's central architectural claim, checked
+#            by a machine instead of by review.
+#
+# Deliberately not here: caching, matrices, coverage, release artefacts. The
+# whole suite runs in well under a minute; complexity in CI is complexity that
+# fails for reasons unrelated to the code.
+
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  native:
+    name: native + sanitizers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      # Includes the unit tests, the five fuzz targets, the core_no_host_deps
+      # layering check, and the Python integration suite against the native
+      # simulator.
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  arm:
+    name: ARM Cortex-M3 on QEMU
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the cross toolchain and emulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi qemu-system-arm
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-arm \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-arm-scv1.cmake \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      # The link itself is a test. scv1.ld fails the build if the OS outgrows
+      # its 55 KB slot or if static data plus the reserved stack exceeds 16 KB
+      # of SRAM; scv1_boot.ld does the same for the 8 KB mask ROM.
+      - name: Build boot ROM and OS
+        run: cmake --build build-arm -j"$(nproc)"
+
+      - name: Report image sizes
+        run: arm-none-eabi-size build-arm/scv1-boot.elf build-arm/smartcard-os.elf
+
+      # Boots the boot ROM, which programs and starts the OS, then drives the
+      # full Python suite over QEMU's UART -- the same tests the native job
+      # runs, which makes them a conformance suite for the port rather than
+      # something rewritten for it.
+      - name: Test on QEMU
+        run: ctest --test-dir build-arm --output-on-failure
+
+  samsung-stub:
+    name: HAL boundary (Samsung stub)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # SCOS_ACK_SAMSUNG_STUB is required because src/hal/samsung/ contains no
+      # Samsung-specific code and every function fails at run time. It exists
+      # to be linked against, not to work. See docs/hardware-port.md.
+      - name: Configure with the unimplemented HAL
+        run: |
+          cmake -S . -B build-stub \
+            -DSCOS_HAL=samsung \
+            -DSCOS_ACK_SAMSUNG_STUB=ON \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build-stub -j"$(nproc)"
+
+      # Only the HAL-free tests run here: there is no working NVM behind the
+      # stub, so the filesystem and integration tests are absent by design.
+      - name: Test what does not need a HAL
+        run: ctest --test-dir build-stub --output-on-failure

@@ -1,5 +1,7 @@
 # smartcard-os
 
+[![ci](https://github.com/hamzaqureshi5/native-smart-card-os/actions/workflows/ci.yml/badge.svg)](https://github.com/hamzaqureshi5/native-smart-card-os/actions/workflows/ci.yml)
+
 A smart-card operating system written from scratch in C, developed against a
 **software simulator of smart-card hardware** so that it can be built and tested
 on a PC with no card hardware of any kind.
@@ -7,10 +9,29 @@ on a PC with no card hardware of any kind.
 The architecture is designed so the simulated hardware layer can later be
 replaced by a real secure MCU without rewriting the OS.
 
-> **Status: Milestone 1 complete.** HAL, simulator HAL, kernel skeleton, APDU
-> parser and dispatcher, the simulator executable, one command (SELECT), and an
-> automated test suite. No filesystem, cryptography, applets, secure messaging
-> or hardware support yet -- see `docs/roadmap.md`.
+> **Status: M1, M2a and M2c complete; M2b in progress.** See
+> [`docs/roadmap.md`](docs/roadmap.md) for the detail.
+>
+> **What works.** A HAL with a bounded surface, two HAL implementations (a
+> native simulator and a real ARM Cortex-M3 target), an ISO 7816-4 APDU parser
+> and dispatcher, a persistent filesystem (MF/DF/transparent EF), SELECT,
+> READ/UPDATE BINARY, CREATE/DELETE FILE, a BER-TLV parser, and a boot loader
+> in mask ROM that programs a blank chip over the card interface. The same
+> Python suite runs against x86 and against real ARM machine code on QEMU.
+>
+> **What does not.** No PIN, no access control, no cryptography, no applets, no
+> secure messaging, no transactions. Three gaps are worth stating outright
+> rather than leaving to be discovered:
+>
+> * **No T=0/T=1 link layer.** The ATR is structurally valid but there is no
+>   TPDU state machine -- no procedure bytes, no NAD/PCB/LEN framing, no guard
+>   times. **No reader driver has ever spoken to this OS**; a PC/SC reader would
+>   not work today.
+> * **No authentication anywhere.** The boot loader will load and activate any
+>   image from anyone, and CREATE/DELETE FILE are ungated. See `T11` and
+>   "Unauthorized file access" in [`docs/threat-model.md`](docs/threat-model.md).
+> * **No tear resistance.** Until the transaction journal exists (M4), no claim
+>   about surviving a power cut mid-write is justified.
 
 ## Quick start
 
