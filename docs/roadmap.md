@@ -35,21 +35,63 @@ distinguishable. Revisit in M3 when access conditions make the trade-off real.
 
 ---
 
-## M2b -- Dynamic filesystem :: NEXT
+## M2b -- Dynamic filesystem :: IN PROGRESS
 
 **Why split from M2a:** `CREATE FILE` needs a BER-TLV parser to read FCP
 templates. That is a second untrusted-input parser and deserves its own tests
 and fuzz targets rather than being tacked onto a working milestone.
 
-* **BER-TLV parser** -- tag, length (short and long form), value; bounded,
-  no recursion. A fuzz target from the start.
-* `CREATE FILE` (E0) from an FCP template; `DELETE FILE` (E4)
+* **BER-TLV parser** :: DONE -- tag, length (short and long form), value;
+  bounded, no recursion. `include/apdu/tlv.h`. Swept exhaustively over all
+  16,777,216 three-byte inputs under ASan.
+* **fuzzing** :: DONE -- APDU parser, TLV parser, command dispatch, filesystem
+  descriptor images, boot loader. `tests/fuzz/`.
+* `CREATE FILE` (E0) from an FCP template; `DELETE FILE` (E4) :: TODO
 * refuse deleting a non-empty DF (safer than a recursive delete that cannot be
-  rolled back before M4)
-* `GET RESPONSE` (C0) and `61XX`, so a Case 3 SELECT can return its FCI
-* extended APDUs -- parsing, buffers, and the 65535-byte bounds
-* EF.ATR (`2F01`)
-* **fuzzing**: APDU parser, TLV parser, filesystem metadata, descriptor images
+  rolled back before M4) :: TODO
+* `GET RESPONSE` (C0) and `61XX`, so a Case 3 SELECT can return its FCI :: TODO
+* extended APDUs -- parsing, buffers, and the 65535-byte bounds :: TODO
+* EF.ATR (`2F01`) :: TODO
+
+---
+
+## M2c -- Boot loader :: DONE
+
+**Why this happened here:** the OS was compiled into whatever ran it, so there
+was no such thing as a blank chip. "Loading an OS" had no meaning, and neither
+did the question of whether the ATR changes afterwards.
+
+* **CODE split into BOOTROM / OSFLASH / OSHDR** -- the boot loader lives in
+  8 KB of mask ROM at address 0 and cannot be replaced; the OS is relinked to
+  run from `0x00002000`. See [chip-scv1.md](chip-scv1.md).
+* **`libscos_boot`** -- pure loader logic over two byte regions, so it is
+  host-testable under ASan. It links `scos_util`, never `scos_core`: a loader
+  that depended on the OS could not load an OS onto a blank part, and the link
+  enforces it.
+* **Code-flash semantics** (`cflash.h`) -- page erase to `0xFF`, programming
+  can only clear bits. A loader bug that works in QEMU and bricks a real part
+  is the class of bug this exists to catch.
+* **OS slot header** -- magic, length, image CRC, header CRC, and a state word
+  deliberately outside the CRC so LOADED -> ACTIVE is reachable by clearing
+  bits without an erase.
+* **Loader command set** (CLA 80): GET STATUS, ERASE, LOAD BLOCK, VERIFY,
+  ACTIVATE, RESTART. Ours, documented in `include/boot/boot_loader.h`. NOT
+  derived from any captured trace of a real card.
+* **Image plausibility check** -- a correct CRC proves the bytes arrived, not
+  that they are code. The initial SP must land in SRAM and the reset vector
+  must land in the image with the Thumb bit set, or VERIFY returns 6984.
+* **BOOTSEL strap** -- forced loader entry, because otherwise an ACTIVE slot is
+  a one-way door and the part can never be reprogrammed.
+* **`tools/mkldr.py`** -- generates `os.ldr` / `recycle.ldr`, and can write a
+  pre-programmed slot offline the way a gang programmer would.
+* **Tests** -- 21 host unit tests, a sequence-driven fuzz target asserting that
+  an ACTIVE slot can never be a lie, and 9 QEMU integration tests including one
+  that proves the APDU-loaded slot is byte-identical to the offline one.
+
+**Not done, and deliberately:** the loader has no authentication and no lock
+bit. Anyone who can reach a blank card can load and activate any image. Signed
+images wait on M5; a one-way fuse needs real silicon. Tracked in
+[threat-model.md](threat-model.md).
 
 ---
 

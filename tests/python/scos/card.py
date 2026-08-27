@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -94,22 +95,63 @@ SW_INS_NOT_SUPPORTED = 0x6D00
 SW_CLA_NOT_SUPPORTED = 0x6E00
 
 
+def _repo_root() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(here, "..", "..", ".."))
+
+
 def default_firmware_path() -> str:
-    """Locate the SCV1 firmware ELF."""
+    """Locate what QEMU should boot: the SCV1 BOOT ROM.
+
+    Not the OS. The OS is linked to run from the OS slot at 0x00002000 and has
+    no vector table at address 0, so QEMU cannot start it directly -- it reads
+    the initial SP and PC from address 0 and gets whatever happens to be there.
+    That is not a limitation to work around; it is the chip being modelled
+    correctly. The boot ROM owns reset, and the boot ROM starts the OS.
+    """
     env = os.environ.get("SCOS_FIRMWARE")
     if env:
         return env
-    here = os.path.dirname(os.path.abspath(__file__))
-    root = os.path.abspath(os.path.join(here, "..", "..", ".."))
-    candidate = os.path.join(root, "build-arm", "smartcard-os.elf")
+    candidate = os.path.join(_repo_root(), "build-arm", "scv1-boot.elf")
     if os.path.isfile(candidate):
         return candidate
     raise CardError(
-        "cannot find the SCV1 firmware; set SCOS_FIRMWARE, or build it with\n"
+        "cannot find the SCV1 boot ROM; set SCOS_FIRMWARE, or build it with\n"
         "  cmake -S . -B build-arm "
         "-DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-arm-scv1.cmake && "
         "cmake --build build-arm"
     )
+
+
+def stage_os_slot(state_dir: str) -> None:
+    """Pre-program the OS slot in `state_dir`, unless it is already programmed.
+
+    The boot ROM boots an ACTIVE slot and drops into its loader otherwise, so a
+    test that wants to talk to the OS has to put an OS there first. Replaying a
+    106-block loader script before all 53 tests would add minutes for no extra
+    coverage -- the loader is covered by test_boot_loader, the fuzz target, and
+    tests/python/test_bootloader.py.
+
+    So this uses the same offline path a gang programmer would: write the slot
+    image and its header directly. tools/mkldr.py builds them, so the bytes are
+    identical to what the APDU loader produces -- verified by
+    test_bootloader.py, which loads over APDUs and compares.
+    """
+    if os.path.isfile(os.path.join(state_dir, "card_oshdr.bin")):
+        return
+
+    root = _repo_root()
+    mkldr = os.environ.get("SCOS_MKLDR", os.path.join(root, "tools", "mkldr.py"))
+    image = os.environ.get(
+        "SCOS_OS_IMAGE", os.path.join(root, "build-arm", "smartcard-os.bin"))
+    if not os.path.isfile(image):
+        raise CardError(f"cannot find the OS image to load: {image}")
+
+    r = subprocess.run(
+        [sys.executable, mkldr, "slot", image, "-d", state_dir],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        raise CardError(f"failed to stage the OS slot:\n{r.stdout}{r.stderr}")
 
 
 def default_simulator_path() -> str:
@@ -148,6 +190,7 @@ class SmartCard:
         self,
         path: Optional[str] = None,
         state_dir: Optional[str] = None,
+        no_os: bool = False,
         seed: int = 1,
         extra_args: Optional[list] = None,
         timeout: float = 10.0,
@@ -167,6 +210,9 @@ class SmartCard:
             qemu = os.environ.get("SCOS_QEMU", "qemu-system-arm")
             cwd = state_dir or tempfile.mkdtemp(prefix="scos-qemu-")
             self._tempdir = None if state_dir else cwd
+            # QEMU boots the boot ROM; the boot ROM needs an OS to boot.
+            if not no_os:
+                stage_os_slot(cwd)
             argv = [
                 qemu,
                 "-M", "mps2-an385",
@@ -216,12 +262,18 @@ class SmartCard:
         self.close()
 
     def _await_boot(self) -> None:
-        """Consume the firmware banner up to 'Waiting for APDU...'.
+        """Consume the firmware banner up to whichever program came up.
 
         On the ARM target the UART is the ONLY channel, so the banner shares it
         with responses -- unlike the native build, where the banner goes to
         stderr. Skipping it here keeps every test above this line identical for
         both targets.
+
+        Two banners are possible and both must be recognised. With an OS in the
+        slot the boot ROM jumps straight to it and the OS says "Waiting for
+        APDU..."; on a blank card the boot ROM stays put and says "Waiting for
+        loader APDUs". Matching only the first would hang forever on exactly
+        the case the boot-loader tests care about.
         """
         deadline = 400
         for _ in range(deadline):
@@ -232,7 +284,7 @@ class SmartCard:
                     f"stderr:\n{self._drain_stderr()}"
                 )
             self._log.append(f"# {line.rstrip()}")
-            if "Waiting for APDU" in line:
+            if "Waiting for APDU" in line or "Waiting for loader APDU" in line:
                 return
         raise CardError("firmware banner never completed")
 

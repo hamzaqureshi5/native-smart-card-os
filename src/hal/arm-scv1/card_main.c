@@ -23,6 +23,21 @@
  */
 static scos_kernel s_card;
 
+/*
+ * The OS's ATR. Historical bytes 'S' 'C' 'O' 'S'.
+ *
+ *   3B    TS   direct convention
+ *   94    T0   TA1 present, 4 historical bytes
+ *   11    TA1  Fi/Di default (372/1)
+ *   00    TB1  no programming voltage required (deprecated but common)
+ *   53 43 4F 53   historical bytes, "SCOS"
+ *
+ * A blank card never sends this: the boot loader is answering then, with its
+ * own ATR. See hal_arm_io.c and docs/chip-scv1.md.
+ */
+const uint8_t  scv1_atr_bytes[] = { 0x3B, 0x94, 0x11, 0x00, 0x53, 0x43, 0x4F, 0x53 };
+const uint32_t scv1_atr_len     = (uint32_t)sizeof(scv1_atr_bytes);
+
 static void put_u32_dec(uint32_t v)
 {
     char buf[12];
@@ -46,15 +61,19 @@ static void banner(void)
 {
     scv1_uart_puts("SmartCard OS on SCV1 (ARM Cortex-M3)\r\n");
     scv1_uart_puts("Version: " SCOS_VERSION_STRING "\r\n");
-    scv1_uart_puts("CODE   0x00000000  ");
-    put_u32_dec(SCV1_CODE_SIZE / 1024u);
-    scv1_uart_puts(" KB\r\nEEPROM 0x00010000  ");
+    /* Report OSFLASH, not CODE. The OS occupies the programmable slot; the
+     * 8 KB below it is the boot ROM's and the OS can neither write nor
+     * meaningfully claim it. */
+    scv1_uart_puts("OSFLASH 0x00002000  ");
+    put_u32_dec(SCV1_OSFLASH_SIZE / 1024u);
+    scv1_uart_puts(" KB\r\nEEPROM  0x00010000  ");
     put_u32_dec(SCV1_EEPROM_SIZE / 1024u);
-    scv1_uart_puts(" KB\r\nDFLASH 0x00014000  ");
+    scv1_uart_puts(" KB\r\nDFLASH  0x00014000  ");
     put_u32_dec(SCV1_DFLASH_SIZE / 1024u);
-    scv1_uart_puts(" KB\r\nSRAM   0x20000000  ");
+    scv1_uart_puts(" KB\r\nSRAM    0x20000000  ");
     put_u32_dec(SCV1_SRAM_SIZE / 1024u);
     scv1_uart_puts(" KB\r\nATR: 3B 94 11 00 53 43 4F 53\r\n");
+    scv1_uart_puts("Started by the SCV1 boot ROM from an ACTIVE OS slot.\r\n");
     scv1_uart_puts(semihost_available()
                        ? "NVM: persistent (semihosting)\r\n"
                        : "NVM: volatile (no semihosting host)\r\n");

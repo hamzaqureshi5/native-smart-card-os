@@ -19,6 +19,13 @@ void scv1_nvm_power_off(void);
 void scv1_uart_init(void);
 void scv1_uart_puts(const char *s);
 
+/*
+ * The ATR, defined by the PROGRAM rather than by the transport: card_main.c
+ * for the OS, boot_main.c for the boot loader. See hal_arm_io.c.
+ */
+extern const uint8_t  scv1_atr_bytes[];
+extern const uint32_t scv1_atr_len;
+
 /* startup.c */
 void scv1_reset_handler(void);
 

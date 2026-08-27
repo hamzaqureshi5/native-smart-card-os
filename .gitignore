@@ -12,3 +12,10 @@ card-state/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# loader scripts and card state produced by tools/mkldr.py and run-scv1.sh
+*.ldr
+mycard/
+card_bootsel.bin
+card_osflash.bin
+card_oshdr.bin

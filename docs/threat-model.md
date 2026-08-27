@@ -233,6 +233,64 @@ in the hands of the person attacking it.
 
 ---
 
+## T11 -- Unauthenticated OS load
+
+**The largest hole in the project as it stands, and it is wide open.**
+
+A blank SCV1 comes up in a boot loader that will accept and activate any image
+from anyone. There is no signature, no authentication, and no lock. The CRC-16
+in the slot header detects accidental corruption only -- anyone able to drive
+the loader can compute a matching CRC in a millisecond.
+
+What an attacker gets: they replace the OS with one that reports PIN success
+unconditionally, or that dumps EEPROM through a proprietary APDU, and the card
+still answers with a plausible ATR. Every other control in this document is
+downstream of the OS being the OS, so this defeats all of them at once.
+
+Made worse by [BOOTSEL](chip-scv1.md#bootsel), which lets an attacker holding
+the card put a *working* card back into the loader.
+
+**Mitigated by:** nothing. This is a development target.
+
+**What a real product needs, both of them:**
+
+1. **A signature over the image**, checked before ACTIVATE, against a public
+   key in mask ROM. Needs the crypto abstraction, so it waits on M5. Note that
+   the check must be over the image *as stored*, after programming, not over
+   what arrived on the wire.
+2. **A one-way lock**, blown at issuance, that disables the loader permanently.
+   This is a fuse or an OTP bit and it cannot be simulated honestly -- software
+   can always un-set a variable. Needs real silicon.
+
+Partial hardening that *is* implemented, and is worth being clear is not a
+substitute: ACTIVATE is separate from VERIFY, so a card interrupted mid-load
+does not boot a partial image; the image CRC and vector table are re-checked on
+every reset, so a damaged image stays in the loader rather than faulting; and
+the loader refuses to program unerased flash, so it cannot be tricked into
+writing the AND of two images.
+
+## T12 -- Boot loader bug bricks the part
+
+The loader lives in mask ROM. It cannot be patched after the wafer is made, so
+a crash or memory-safety bug in it is not a bug report, it is scrap.
+
+**Mitigated by:**
+
+* the loader logic is **pure** -- it operates on two caller-supplied byte
+  regions and knows no addresses, so all of it runs on the host under
+  AddressSanitizer (`tests/unit/test_boot_loader.c`, 21 tests);
+* a fuzz target drives it as a *sequence* of commands, with guard bands either
+  side of both regions, asserting after every command that an ACTIVE slot can
+  never be a lie (`tests/fuzz/fuzz_boot.c`);
+* it does **not** reuse the OS's ISO 7816-4 parser. That parser is good and
+  fuzzed, but linking it would mean the OS's future changes reach into
+  unpatchable code. The loader accepts only the two APDU shapes it needs;
+* `scv1_boot.ld` fails the link if the loader outgrows its 8 KB.
+
+**Not mitigated:** the jump itself, the VTOR write and the flash driver cannot
+be host-tested -- they need the chip. They are covered by QEMU integration
+tests, which is weaker than a proof and is the best available.
+
 ## Deferred threats
 
 Not addressed because the subsystems do not exist yet. Listed so they are not
@@ -250,6 +308,8 @@ forgotten.
 | Side-channel (power/EM) | hardware | cannot be simulated |
 | Fault injection | hardware | software consequences testable (M4); the attack is not |
 | Invasive probing | hardware | |
+| Signed OS images | M5 | see T11; needs the crypto abstraction first |
+| Loader lock bit at issuance | hardware | see T11; software cannot honestly simulate a one-way fuse |
 
 ## Notes on what makes this different from software security
 

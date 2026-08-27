@@ -35,16 +35,50 @@
 /*
  * Region        Base         Size    Character
  * ------------- -----------  ------  ----------------------------------------
- * CODE          0x00000000    64 KB  OS code, rodata, vector table. "ROM".
+ * CODE          0x00000000    64 KB  executable. Subdivided below.
  * EEPROM        0x00010000    16 KB  byte-writable, high endurance. Metadata.
  * DFLASH        0x00014000   256 KB  page-erased (256 B). File data.
  * SRAM          0x20000000    16 KB  volatile.
  *
- * Kept identical to the simulator's geometry so the same filesystem image is
- * valid on both, and so the RAM/ROM budgets mean the same thing.
+ * EEPROM/DFLASH geometry is kept identical to the native simulator so the same
+ * filesystem image is valid on both.
  */
 #define SCV1_CODE_BASE    0x00000000u
 #define SCV1_CODE_SIZE    (64u * 1024u)
+
+/*
+ * CODE is not one flat lump. A chip that can be shipped blank and programmed
+ * afterwards must have something non-erasable to do the programming:
+ *
+ *   0x00000000  BOOTROM   8 KB   mask ROM. Holds the boot loader. The reset
+ *                                vector lives here, so this is what runs on a
+ *                                blank part. Physically unwritable -- an
+ *                                attacker who owns the loader owns the card,
+ *                                so the loader must not be replaceable.
+ *   0x00002000  OSFLASH  55 KB   programmable. The OS image lands here, and
+ *                                its vector table sits at OSFLASH_BASE.
+ *   0x0000FC00  OSHDR     1 KB   programmable. One page describing the slot:
+ *                                length, CRC, and whether it is ACTIVE.
+ *
+ * OSFLASH_BASE is 8 KB aligned, which satisfies the ARMv7-M requirement that
+ * VTOR be aligned to at least 128 bytes (and to the table size rounded up to a
+ * power of two). The boot loader points VTOR here before handing over.
+ *
+ * The header is at the TOP rather than the bottom so OSFLASH_BASE stays a
+ * round number -- it is the address you will see in every link map and every
+ * loader transcript, so it is worth keeping legible.
+ */
+#define SCV1_BOOTROM_BASE 0x00000000u
+#define SCV1_BOOTROM_SIZE (8u * 1024u)
+
+#define SCV1_OSFLASH_BASE 0x00002000u
+#define SCV1_OSFLASH_SIZE (55u * 1024u)
+
+#define SCV1_OSHDR_BASE   0x0000FC00u
+#define SCV1_OSHDR_SIZE   1024u
+
+/* Code flash erases a page at a time and can only clear bits; see cflash.h. */
+#define SCV1_CFLASH_PAGE  1024u
 
 #define SCV1_EEPROM_BASE  0x00010000u
 #define SCV1_EEPROM_SIZE  (16u * 1024u)
@@ -80,6 +114,11 @@
 #define SCV1_UART_STATE_RX_FULL 0x2u
 #define SCV1_UART_CTRL_TX_EN    0x1u
 #define SCV1_UART_CTRL_RX_EN    0x2u
+
+/* Vector Table Offset Register -- ARMv7-M core peripheral (SCB->VTOR), address
+ * fixed by the architecture. The boot loader writes it to relocate the vector
+ * table from BOOTROM to the loaded OS before jumping. */
+#define SCV1_SCB_VTOR     (*(volatile uint32_t *)0xE000ED08u)
 
 /* SysTick -- ARMv7-M core peripheral, address fixed by the architecture. */
 #define SCV1_SYSTICK_CSR  (*(volatile uint32_t *)0xE000E010u)
